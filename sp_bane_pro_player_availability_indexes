@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_availability_index]    Script Date: 10/13/2016 9:44:21 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_player_availability_indexes]    Script Date: 5/10/2022 10:13:19 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -9,13 +9,22 @@ SET QUOTED_IDENTIFIER ON
 GO
 
 
-ALTER procedure [dbo].[sp_analysis_players_availability_index] (@oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_bane_pro_player_availability_indexes] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_stage_players_availability_index
+Procedure Name:	sp_bane_pro_player_availability_indexes
 Author:			Corey Krawiec
-Creation Date:	8/8/2016
+Creation Date:	08/08/2016
 Description:       
 
 
@@ -35,7 +44,7 @@ Date         SE           Description
 
 BEGIN 
   
-
+	SET ANSI_WARNINGS OFF
 
 	SET @oReturnCD  = 0
 
@@ -44,21 +53,20 @@ BEGIN
 	Before you sum the values, you need to create a table that has the next week's injury field added on to it.
 
 	TEMP TABLES:
-		##temp_availability_add_next_week_injury
+		#temp_availability_add_next_week_injury
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_availability_add_next_week_injury exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_availability_add_next_week_injury') IS NOT NULL
-		DROP TABLE ##temp_availability_add_next_week_injury
+	-- Check if #temp_availability_add_next_week_injury exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_availability_add_next_week_injury') IS NOT NULL
+		DROP TABLE #temp_availability_add_next_week_injury
 
 	SELECT gw.*
 		,LEAD(injury_status_week) OVER (PARTITION BY nfl_player_id ORDER BY nfl_game_week_end) AS injury_status_next_week
-	INTO ##temp_availability_add_next_week_injury
-	FROM [Analytics].[dbo].[analysis_players_gameweek_status] gw
+	INTO #temp_availability_add_next_week_injury
+	FROM [bane_pro_player_gameweek_statuses] gw
 	ORDER BY nfl_player_id
 		,nfl_game_week_end
-
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -79,23 +87,23 @@ BEGIN
 	See BuildDM_PlayerPlay_Fact_PlayerGame_Base if you want to go back to the old SAS way.
 
 	TEMP TABLES:
-		##temp_availability_sums
+		#temp_availability_sums
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_availability_sums exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_availability_sums') IS NOT NULL
-		DROP TABLE ##temp_availability_sums
+	-- Check if #temp_availability_sums exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_availability_sums') IS NOT NULL
+		DROP TABLE #temp_availability_sums
 
 	SELECT gw.nfl_player_id
 	      ,gw.season
-		  ,SUM(CASE WHEN status_roster_simple IN ('INJURED','PUP')
+		  ,SUM(CASE WHEN status_roster_simple IN ('INJURED','PUP') AND season_type <> 'POST'
 						THEN 0
 					WHEN status_roster_simple IN ('PRACTICESQUAD','RESERVE','SUSPENDED')
 						THEN NULL
 					WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays > 0 
 					AND (injury_status_week LIKE '%DOUBT%' OR injury_status_week LIKE '%OUT%' OR injury_status_week LIKE '%QUEST%' OR injury_status_week LIKE '%NONE%' OR injury_status_week LIKE '%PART%')	
-						THEN 0.5
+						THEN CASE WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays > 20 THEN 0.85 ELSE 0.5 END
 					WHEN status_roster_simple ='INACTIVE'
 					AND (OffensivePlays + DefensivePlays + SpecialTeamPlays = 0 OR OffensivePlays + DefensivePlays + SpecialTeamPlays IS NULL)
 					AND injury_status_week IS NULL 
@@ -109,12 +117,12 @@ BEGIN
 					AND (OffensivePlays + DefensivePlays + SpecialTeamPlays = 0 OR OffensivePlays + DefensivePlays + SpecialTeamPlays IS NULL)
 					AND (injury_status_week LIKE '%DOUBT%' OR injury_status_week LIKE '%OUT%' OR injury_status_week LIKE '%QUEST%' OR injury_status_week LIKE '%NONE%' OR injury_status_week LIKE '%PART%') 
 						THEN 0 
-					WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays > 0
+					WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays >= 0
 						THEN 1
 					ELSE NULL
 			   END)
 			   AS availability_total
-		  ,SUM(CASE WHEN status_roster_simple IN ('INJURED','PUP')
+		  ,SUM(CASE WHEN status_roster_simple IN ('INJURED','PUP') AND season_type <> 'POST'
 						THEN 1
 					WHEN status_roster_simple IN ('PRACTICESQUAD','RESERVE','SUSPENDED')
 						THEN NULL
@@ -134,13 +142,13 @@ BEGIN
 					AND (OffensivePlays + DefensivePlays + SpecialTeamPlays = 0 OR OffensivePlays + DefensivePlays + SpecialTeamPlays IS NULL)
 					AND (injury_status_week LIKE '%DOUBT%' OR injury_status_week LIKE '%OUT%' OR injury_status_week LIKE '%QUEST%' OR injury_status_week LIKE '%NONE%' OR injury_status_week LIKE '%PART%')	 
 						THEN 1
-					WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays > 0
+					WHEN OffensivePlays + DefensivePlays + SpecialTeamPlays >= 0
 						THEN 1
 					ELSE NULL
 			   END)
 			   AS availability_chances
-	INTO ##temp_availability_sums
-	FROM ##temp_availability_add_next_week_injury gw
+	INTO #temp_availability_sums
+	FROM #temp_availability_add_next_week_injury gw
 	LEFT JOIN [ClubDB].[dbo].[PlayTime] pt
 		ON gw.nfl_game_key = pt.GameKey
 		AND gw.nfl_player_id = pt.PlayerID	 
@@ -149,22 +157,21 @@ BEGIN
 		,gw.season
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 	Apply a season weight to the availability - more recent seasons get more weight.
 
 	TEMP TABLES:
-		##temp_availability_season_weight
+		#temp_availability_season_weight
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 	DECLARE @current_season INT
-	SELECT @current_season = (SELECT MAX(season) FROM [Analytics].[dbo].[analysis_players_gameweek_status])
+	SELECT @current_season = (SELECT MAX(season) FROM [bane_pro_player_gameweek_statuses])
 
-	-- Check if ##temp_availability_season_weight exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_availability_season_weight') IS NOT NULL
-		DROP TABLE ##temp_availability_season_weight
+	-- Check if #temp_availability_season_weight exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_availability_season_weight') IS NOT NULL
+		DROP TABLE #temp_availability_season_weight
 
 	SELECT nfl_player_id
 	    ,SUM(CASE WHEN season >= @current_season - 1 THEN availability_total
@@ -191,10 +198,9 @@ BEGIN
 				ELSE 0
 			END),0)
 		AS availability_index_raw
-	INTO ##temp_availability_season_weight
-	FROM ##temp_availability_sums av
+	INTO #temp_availability_season_weight
+	FROM #temp_availability_sums av
 	GROUP BY nfl_player_id
-
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -206,19 +212,19 @@ BEGIN
 	would result in a lower availabilty score anyway, it should be fine.
 
 	TEMP TABLES:
-		##temp_days_injured_current_season
+		#temp_days_injured_current_season
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_days_injured_current_season exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_days_injured_current_season') IS NOT NULL
-		DROP TABLE ##temp_days_injured_current_season
+	-- Check if #temp_days_injured_current_season exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_days_injured_current_season') IS NOT NULL
+		DROP TABLE #temp_days_injured_current_season
 
 	SELECT nfl_player_id
 			,SUM(CASE WHEN status_roster_simple IN ('INJURED','PUP') THEN total_days ELSE 0 END) AS total_days_injured_pup
 			,SUM(CASE WHEN status_roster_simple IN ('WAIVEINJ') THEN total_days ELSE 0 END) AS total_days_waive_injured
-	INTO ##temp_days_injured_current_season
-	FROM [Analytics].[dbo].[stage_players_roster_status_by_date]
+	INTO #temp_days_injured_current_season
+	FROM [pro_player_by_date_statuses]
 	WHERE status_roster_simple IN ('INJURED','PUP','WAIVEINJ')
 	AND season = @current_season
 	GROUP BY nfl_player_id
@@ -236,19 +242,21 @@ BEGIN
 		Yellow = 70% up to 85%
 		Red = Below 70%
 
-	ANALYSIS TABLES:
-		analysis_players_availability_index
+	PERMANENT TABLES:
+		bane_pro_player_availability_indexes
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE analysis_players_availability_index
+	TRUNCATE TABLE bane_pro_player_availability_indexes
 
-	INSERT INTO analysis_players_availability_index (
+	INSERT INTO bane_pro_player_availability_indexes (
 			[nfl_player_id]
            ,[availability_index_current]
            ,[availability_color_current]
            ,[availability_code_current]
-           ,[availability_explanation_current])
+           ,[availability_explanation_current]
+		   ,[updated_at]
+		   )
 	SELECT sw.nfl_player_id
 		,availability_index_raw - (CASE WHEN suspensions_total > 1 OR suspensions_games >= 4 THEN 0.3001 
 									    WHEN suspensions_total = 1 THEN 0.1501
@@ -274,16 +282,16 @@ BEGIN
 					  WHEN total_days_injured_pup > 0 THEN CONCAT('Health: ',LEFT(ROUND(availability_index_raw * 100,1),4),'% Available; ',total_days_injured_pup,' days on PUP/IR')
 					  WHEN total_days_waive_injured > 0 THEN CONCAT('Health: ',LEFT(ROUND(availability_index_raw * 100,1),4),'% Available; ',total_days_waive_injured,' days Waive/Injured')
 					  ELSE CONCAT('Health: ',LEFT(ROUND(availability_index_raw * 100,1),4),'% Available')
-		END,'100.','100')
-		AS availability_explanation_current 
-	FROM ##temp_availability_season_weight sw
-	LEFT JOIN [Analytics].[dbo].[stage_players_suspensions] su
+		END,'100.','100') AS availability_explanation_current
+		,GETDATE() AS updated_at
+	FROM #temp_availability_season_weight sw
+	LEFT JOIN [pro_player_suspensions] su
 		ON sw.nfl_player_id = su.nfl_player_id
-	LEFT JOIN ##temp_days_injured_current_season ir
+	LEFT JOIN #temp_days_injured_current_season ir
 		ON sw.nfl_player_id = ir.nfl_player_id
 	WHERE availability_total_current IS NOT NULL
-	AND availability_chances_current IS NOT NULL
-	AND availability_chances_current > 0
+		AND availability_chances_current IS NOT NULL
+		AND availability_chances_current > 0
 
 
 	PROC_END:
@@ -291,6 +299,8 @@ BEGIN
 	RETURN @oReturnCD  
 
 END
+
+
 
 
 
