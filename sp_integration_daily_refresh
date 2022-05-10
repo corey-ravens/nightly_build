@@ -1,0 +1,491 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp__integration_daily_refresh__NEW]    Script Date: 5/10/2022 11:24:25 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+ALTER proc [dbo].[sp__integration_daily_refresh__NEW] (@iSeason INT)
+
+AS
+
+
+/*********************************************************************************
+
+Procedure Name:	sp_integration_daily_refresh
+Author:			Jeremy Parks / Corey Krawiec
+Creation Date:	09/27/2021
+Description:       
+
+
+	This procedure is the master procedure to run the daily refresh.
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE     Description
+----------	----	---------------------------------------------------------------
+
+
+**********************************************************************************/
+
+
+begin
+
+	-- Declare the return Code
+	DECLARE
+		@oReturnCD INT, 
+		@vBatchKey INT 
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+
+	Write the batch log - first get a new key, then create a record with the starting information.
+
+	OUTPUT TABLES:
+	log_batch_run_2021
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	EXEC [sp_common_get_next_surrogate_key] 'log_batch_run_2021' , @vBatchKey OUTPUT 
+
+	INSERT INTO log_batch_run_2021 (
+		[batch_run_key]
+		,[batch_run_desc]
+		,[minimum_season]
+		,[start_time])
+	values (
+		@vBatchKey 
+		, 'Nightly Batch Run :  ' + CAST(CAST(GETDATE() as DATE) AS VARCHAR(20))
+		, @iSeason
+		, GETDATE())
+	 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Run the player, league, and team level procedures.
+	
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- League week dates
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_nfl_season_week_dates' , 201, 0 , NULL
+	EXEC sp_nfl_season_week_dates  @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_nfl_season_week_dates' , 201, 1 , NULL
+
+
+	-- PFF/CFF game information
+	--EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pff_pro_college_games' , 2, 0 , NULL
+	--EXEC sp_pff_pro_college_games @oReturnCD 
+	--EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pff_pro_college_games' , 2, 1 , NULL
+
+
+	-- Pro player status by date
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_by_date_statuses' , 202, 0 , NULL
+	EXEC sp_pro_player_by_date_statuses @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_by_date_statuses' , 202, 1, NULL
+
+
+	-- Pro player weekly injuries 
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_gameweek_injuries' , 203, 0 , NULL
+	EXEC sp_pro_player_gameweek_injuries @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_gameweek_injuries' , 203, 1 , NULL
+
+
+	-- Pro player gameweek status
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_gameweek_statuses' , 204, 0 , NULL
+	EXEC sp_bane_pro_player_gameweek_statuses @iSeason
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_gameweek_statuses' , 204, 1 , NULL
+
+
+	-- Pro player suspensions
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_suspensions' , 205, 0 , NULL
+	EXEC sp_pro_player_suspensions @iSeason
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_suspensions' , 205, 1 , NULL
+
+
+	-- Contracts
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_contracts' , 206, 0 , NULL
+	EXEC [sp_bane_player_contracts] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_contracts' , 206, 1 , NULL
+
+
+	-- Salary Cap summaries
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_salary_cap_summaries' , 207, 0 , NULL
+	EXEC sp_bane_player_salary_cap_summaries @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_salary_cap_summaries' , 207, 1 , NULL
+
+
+	-- Prep play data
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_daily_build_prep_play_facts' , 208, 0 , NULL
+	EXEC sp_daily_build_prep_play_facts @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_daily_build_prep_play_facts' , 208, 1 , NULL
+
+
+	-- Prep non pro data
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_daily_build_prep_non_pro_tables' , 209, 0 , NULL
+	EXEC sp_daily_build_prep_non_pro_tables @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_daily_build_prep_non_pro_tables' , 209, 1 , NULL
+	
+
+	-- Pro player play injuries
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_injury_facts' , 210, 0 , NULL
+	EXEC [sp_pro_player_play_injury_facts] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_injury_facts' , 210, 1 , NULL
+
+
+	-- College player play injuries
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_injury_facts' , 211, 0 , NULL
+	EXEC [sp_college_player_play_injury_facts] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_injury_facts' , 211, 1 , NULL
+
+
+	-- Pro playtime table
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_game_playtimes' , 212, 0 , NULL
+	EXEC sp_bane_pro_player_game_playtimes @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_game_playtimes' , 212, 1 , NULL
+
+
+	-- College playtime table
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_player_game_playtimes' , 213, 0 , NULL
+	EXEC sp_bane_college_player_game_playtimes @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_player_game_playtimes' , 213, 1 , NULL
+
+
+	-- Pro availability indexes
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_availability_indexes' , 214, 0 , NULL
+	EXEC sp_bane_pro_player_availability_indexes @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_availability_indexes' , 214, 1 , NULL
+
+
+	-- CFF/PFF game grades
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_cff_pff_game_grades' , 215, 0 , NULL
+	EXEC sp_bane_player_cff_pff_game_grades @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_player_cff_pff_game_grades' , 215, 1 , NULL
+
+
+	--Pro team stats
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_team_stats' , 216, 0 , NULL
+	EXEC sp_bane_pro_team_stats @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_team_stats' , 216, 1 , NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	Run the play and player play level procedures for pro and college.
+	
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Pro Play facts
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_play_facts' , 301, 0 , NULL
+	EXEC sp_pro_play_facts @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_play_facts' , 301, 1 , NULL
+
+
+	-- Pro player play facts
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_facts' , 302, 0 , NULL
+	EXEC sp_pro_player_play_facts @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_facts' , 302, 1 , NULL
+
+
+	-- College play facts
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_play_facts' , 303, 0 , NULL
+	EXEC sp_college_play_facts @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_play_facts' , 303, 1 , NULL
+
+
+	-- College player play facts
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_facts' , 304, 0 , NULL
+	EXEC sp_college_player_play_facts @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_facts' , 304, 1 , NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Run the play level R jobs. These are run here becuase they are used to 
+	calculate additional data further along in the process.
+
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Expected yards after catch  
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_expected_after_catch_yards' , 401, 0 , NULL
+	EXEC sp_r_pro_play_expected_after_catch_yards @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_expected_after_catch_yards' , 401, 1 , NULL
+
+
+	-- Expected rush yards
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_expected_rush_yards' , 402, 0 , NULL
+	EXEC sp_r_pro_play_expected_rush_yards @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_expected_rush_yards' , 402, 1 , NULL
+
+
+	-- Catch probabilities - Non NGS
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_catch_probabilities' , 403, 0 , NULL
+	EXEC sp_r_pro_play_catch_probabilities @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_play_catch_probabilities' , 403, 1 , NULL
+
+
+	-- Tackle probabilities
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_play_tackle_probabilities' , 404, 0 , NULL
+	EXEC sp_r_pro_player_play_tackle_probabilities @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_play_tackle_probabilities' , 404, 1 , NULL	
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Run the post play-related R jobs procedures.
+
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Udpate pro play and play level variables
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_facts_step_2' , 501, 0 , NULL
+	EXEC sp_pro_player_play_facts_step_2 @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_play_facts_step_2' , 501, 1 , NULL
+
+
+	-- Udpate college play and play level variables
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_facts_step_2' , 502, 0 , NULL
+	EXEC sp_college_player_play_facts_step_2 @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_play_facts_step_2' , 502, 1 , NULL
+
+
+	-- Pro season positions
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_season_positions' , 503, 0 , NULL
+	EXEC sp_pro_player_season_positions @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_season_positions' , 503, 1 , NULL
+
+
+	-- College season positions
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_season_positions' , 504, 0 , NULL
+	EXEC sp_college_player_season_positions @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_season_positions' , 504, 1 , NULL
+
+
+	--Pro game stats for bane
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_game_stats' , 505, 0 , NULL
+	EXEC sp_bane_pro_player_game_stats @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_game_stats' , 505, 1 , NULL
+
+
+	--College game stats for bane
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_player_game_stats' , 506, 0 , NULL
+	EXEC sp_bane_college_player_game_stats @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_player_game_stats' , 506, 1 , NULL
+
+
+	--Pro season stats
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_season_stats' , 507, 0 , NULL
+	EXEC sp_pro_player_season_stats @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_pro_player_season_stats' , 507, 1 , NULL
+
+
+	--College season stats
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_season_stats' , 508, 0 , NULL
+	EXEC sp_college_player_season_stats @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_college_player_season_stats' , 508, 1 , NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+		
+	Run the regressed statistics R jobs.
+
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Yards after catch
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_after_catch_yards' , 601, 0 , NULL
+	EXEC [sp_r_pro_player_after_catch_yards] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_after_catch_yards' , 601, 1 , NULL
+
+
+	-- Yards after catch against 
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_after_catch_yards' , 602, 0 , NULL
+	EXEC [sp_r_pro_player_allowed_after_catch_yards] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_after_catch_yards' , 602, 1 , NULL
+
+
+	-- Completion yards against
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_completion_yards' , 603, 0 , NULL
+	EXEC [sp_r_pro_player_allowed_completion_yards] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_completion_yards' , 603, 1 , NULL
+
+
+	-- Disruptions allowed
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_disruption_rates' , 604, 0 , NULL
+	EXEC [sp_r_pro_player_allowed_disruption_rates] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_disruption_rates' , 604, 1 , NULL
+
+
+	--********************************************** REMOVE
+	-- Rush yards allowed
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_rush_yards' , 605, 0 , NULL
+	EXEC [sp_r_pro_player_allowed_rush_yards] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_allowed_rush_yards' , 605, 1 , NULL
+
+
+	-- Tackles avoided 
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_avoided_tackles' , 606, 0 , NULL
+	EXEC [sp_r_pro_player_avoided_tackles] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_avoided_tackles' , 606, 1 , NULL
+
+
+	-- Catch rate
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_catch_rates' , 607, 0 , NULL
+	EXEC [sp_r_pro_player_catch_rates] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_catch_rates' , 607, 1 , NULL
+
+
+	-- Completion percentage
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_completion_percentages' , 608, 0 , NULL
+	EXEC sp_r_pro_player_completion_percentages @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_completion_percentages' , 608, 1 , NULL
+
+
+	-- Disruption rate
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_disruption_rates' , 609, 0 , NULL
+	EXEC [sp_r_pro_player_disruption_rates] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_disruption_rates' , 609, 1 , NULL
+
+
+	-- Expected points added
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_points' , 610, 0 , NULL
+	EXEC sp_r_pro_player_expected_points @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_points' , 610, 1 , NULL
+
+
+	-- Expected tackles DB
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_tackles_db' , 611, 0 , NULL
+	EXEC [sp_r_pro_player_expected_tackles_db] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_tackles_db' , 611, 1 , NULL
+
+
+	-- Expected tackles Front 7 
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_tackles_front_7' , 612, 0 , NULL
+	EXEC [sp_r_pro_player_expected_tackles_front_7] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_expected_tackles_front_7' , 612, 1 , NULL
+
+
+	-- 	PBU percentage
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_pbu_percentages' , 613, 0 , NULL
+	EXEC [sp_r_pro_player_pbu_percentages] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_pbu_percentages' , 613, 1 , NULL
+
+
+	-- Yards per route
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_per_route_yards' , 614, 0 , NULL
+	EXEC [sp_r_pro_player_per_route_yards] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_per_route_yards' , 614, 1 , NULL
+
+
+	-- Run block wins  
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_run_block_wins' , 615, 0 , NULL
+	EXEC [sp_r_pro_player_run_block_wins] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_run_block_wins' , 615, 1 , NULL
+
+
+	-- Run defense wins
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_run_defense_wins' , 616, 0 , NULL
+	EXEC [sp_r_pro_player_run_defense_wins] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_run_defense_wins' , 616, 1 , NULL
+	
+
+	-- Stop rate
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_stop_rates' , 617, 0 , NULL
+	EXEC [sp_r_pro_player_stop_rates] @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_r_pro_player_stop_rates' , 617, 1 , NULL
+		
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+		
+	Run the additional procedures: 
+		- Pro player stat scores
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+		
+	-- Pro player stat scores
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_stat_scores' , 701, 0 , NULL
+	EXEC sp_bane_pro_player_stat_scores  @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_player_stat_scores' , 701, 1 , NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)
+
+		
+	Update Analytics tables
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+		
+	-- Update pro analytics tables
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_UPDATE_ANALYTICS' , 801, 0 , NULL
+	EXEC sp_bane_pro_UPDATE_ANALYTICS @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_pro_UPDATE_ANALYTICS' , 801, 1 , NULL
+
+
+	-- Update college analytics tables
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_UPDATE_ANALYTICS' , 802, 0 , NULL
+	EXEC sp_bane_college_UPDATE_ANALYTICS @iSeason, @oReturnCD OUTPUT
+	EXEC sp_log_batch_run_step_2021 @vBatchKey, @iSeason, 'sp_bane_college_UPDATE_ANALYTICS' , 802, 1 , NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+		
+	Complete the process:
+		- Update the Batch log with the time of completion
+
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+		
+	UPDATE log_batch_run_2021
+		SET end_time = getdate()
+	WHERE batch_run_key = @vBatchKey
+
+
+
+END
+
+
+
+GO
+
+
