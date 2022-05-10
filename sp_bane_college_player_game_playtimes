@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_stage_players_game_college_playtimes]    Script Date: 5/10/2022 11:27:55 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_playtimes]    Script Date: 5/10/2022 11:27:06 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -13,13 +13,15 @@ GO
 
 
 
-ALTER PROCEDURE [dbo].[sp_stage_players_game_college_playtimes] (@oReturnCD INT OUTPUT) as
+
+
+ALTER PROCEDURE [dbo].[sp_bane_college_player_game_playtimes] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_stage_players_game_college_playtime 
+Procedure Name:	sp_college_player_game_playtimes
 Author:			Corey Krawiec
-Creation Date:	9/22/2016
+Creation Date:	09/22/2021
 Description:       
 
 	This program is for creating a player game playtime table.  We have that elsewhere but this
@@ -31,10 +33,13 @@ Description:
 	equivalent games.  A player can have more than 16 games played based on his special teams 
 	participation going in the numerator but not the denominator.
 
-	We are creating a staging table with all this information so it is all in one easy to access place.
+	For season level playtime and equivalent games, there is a view college_season_playtimes.
 
-	For season level playtime and equivalent games, there is a view stage_players_season_college_playtime
-
+Steps:
+	(1) Special teams playtime
+	(2) Offense and defense playtime
+	(3) Find out who the "starters" are
+	(4) Write to college_player_game_playtimes
 	
 			
 Input Parameters:
@@ -52,13 +57,52 @@ Date         SE           Description
 BEGIN 
 
 
-	SET @oReturnCD = 0 
+	SET @oReturnCD = 0
+
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
+	(0)
+
+	Create temp tables of the CFF tables - they update frequently and you don't want to get caught mid update when this is running.
+
+	In this step do plays.
+	
+	TEMP TABLES:
+		#temp_cff_plays
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cff_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_plays') IS NOT NULL
+		DROP TABLE #temp_cff_plays
+
+	SELECT *
+		,CASE WHEN [week] IN ('AS','AP','AG','ASG','ASP') THEN 'AS'
+			WHEN [week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 'AS'
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('BG','CC','FC','PO') THEN 'POST'
+			ELSE 'REG'
+		END AS season_type
+		,CASE WHEN LTRIM(RTRIM(UPPER([week]))) = 'CC' THEN 1
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'BG' THEN 2
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'PO' THEN 3
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'FC' THEN 4
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('AS','AP','AG','ASG','ASP') THEN 5
+			ELSE CAST([week] AS TINYINT)
+		END AS [week_int]
+		,RANK() OVER (PARTITION BY game_id, offense ORDER BY CASE WHEN special_teams_type IS NULL THEN sort_order ELSE 999999 END) AS team_play_order
+	INTO #temp_cff_plays
+	FROM daily_build_cff_plays
+	WHERE NOT [week] IN ('AS','AP','AG','ASG','ASP')
+		AND NOT ([week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST'))
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 	(1)(a)
-
-
+	
 	Find the player's game special team snap counts.  These get summed manually so we can calssify what type of special teams play.
 
 	OUTPUT TABLE
@@ -70,41 +114,48 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_players_game_snaps_st') IS NOT NULL
 		DROP TABLE #temp_players_game_snaps_st
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
+	SELECT pf.gsis_game_id AS gsis_game_key
 		  ,sc.ncaa_club_id
-		  ,sp.pff_GSISPLAYERID AS gsis_player_id
+		  ,sp.gsis_player_id AS gsis_player_id
+		  ,season
+		  ,season_type
+		  ,week_int AS [week]
 		  ,COUNT(*) AS snap_count_special_teams
-		  ,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 0.4 
-					WHEN pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
+		  ,SUM(CASE WHEN pf.special_teams_type IN ('PUNT','KICKOFF') THEN 0.4 
+					WHEN pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
 					ELSE 0 
 		   END) AS snap_count_special_teams_weighted
-		  ,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase
-		  ,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt
-		  ,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('KICKOFF') THEN 1 ELSE 0 END) AS snap_count_kickoff
-		  ,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 0.4 
-					WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
+		  ,SUM(CASE WHEN pf.special_teams_type IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase
+		  ,SUM(CASE WHEN pf.special_teams_type IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt
+		  ,SUM(CASE WHEN pf.special_teams_type IN ('KICKOFF') THEN 1 ELSE 0 END) AS snap_count_kickoff
+		  ,SUM(CASE WHEN pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal
+		  ,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT','KICKOFF') THEN 0.4 
+					WHEN garbage_time = 0 AND pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
 					ELSE 0 
 				END) AS snap_count_special_teams_weighted_no_garbage
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('KICKOFF')THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage
-		  ,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('KICKOFF')THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage
 	INTO #temp_players_game_snaps_st
-	FROM CFF.dbo.PffPlays pf
-	INNER JOIN CFF.dbo.PFFSpecial sp
-		ON pf.pff_PLAYID = sp.pff_PLAYID
+	FROM #temp_cff_plays pf
+	INNER JOIN daily_build_cff_special sp
+		ON pf.play_id = sp.play_id
 	INNER JOIN BaneProductionAnalytics.dbo.schools sc
-		ON sp.pff_TEAM = sc.code
-	WHERE pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
-		--AND pff_NOPLAY = 0
-	GROUP BY pf.pff_GSISGAMEKEY
+		ON sp.team = sc.code
+	WHERE pf.special_teams_type IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
+		--AND no_play = 0
+	GROUP BY pf.gsis_game_id
 		  ,sc.ncaa_club_id
-		  ,sp.pff_GSISPLAYERID
+		  ,sp.gsis_player_id
+		  ,season
+		  ,season_type
+		  ,week_int
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 
 	(1)(b)
 
@@ -121,39 +172,39 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_teams_game_snaps_st') IS NOT NULL
 		DROP TABLE #temp_teams_game_snaps_st
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
+	SELECT gsis_game_id AS gsis_game_key
 		,COUNT(*) AS snap_count_special_teams_team
-		,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 0.4 
-					WHEN pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
+		,SUM(CASE WHEN pf.special_teams_type IN ('PUNT','KICKOFF') THEN 0.4 
+					WHEN pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
 					ELSE 0 
 		   END) AS snap_count_special_teams_weighted_team
-		,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_team
-		,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_team
-		,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('KICKOFF') THEN 1 ELSE 0 END) AS snap_count_kickoff_team
-		,SUM(CASE WHEN pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 0.4 
-				WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
+		,SUM(CASE WHEN pf.special_teams_type IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_team
+		,SUM(CASE WHEN pf.special_teams_type IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_team
+		,SUM(CASE WHEN pf.special_teams_type IN ('KICKOFF') THEN 1 ELSE 0 END) AS snap_count_kickoff_team
+		,SUM(CASE WHEN pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_team
+		,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage_team
+		,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT','KICKOFF') THEN 0.4 
+				WHEN garbage_time = 0 AND pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 0.1 
 				ELSE 0 
 		 END) AS snap_count_special_teams_weighted_no_garbage_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('KICKOFF')THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage_team
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 AND pf.pff_SPECIALTEAMSTYPE IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage_team
+		,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT','KICKOFF') THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage_team
+		,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('PUNT') THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage_team
+		,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('KICKOFF')THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage_team
+		,SUM(CASE WHEN garbage_time = 0 AND pf.special_teams_type IN ('EXTRA POINT','FIELD GOAL') THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage_team
 	INTO #temp_teams_game_snaps_st
-	FROM CFF.dbo.PffPlays pf
+	FROM #temp_cff_plays pf
 	INNER JOIN BaneProductionAnalytics.dbo.schools so
-		ON pf.pff_OFFTEAM = so.code
-	WHERE pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
-		--AND pff_NOPLAY = 0
-	GROUP BY  pf.pff_GSISGAMEKEY
+		ON pf.offense = so.code
+	WHERE pf.special_teams_type IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
+		--AND no_play = 0
+	GROUP BY  pf.gsis_game_id
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 	(1)(c)
-
-
+	
 	Sum up the 4 phase special teams snaps a player missed cause he was injured so you can take them out of the injury sums later.
 	
 	OUTPUT TABLE
@@ -165,18 +216,18 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_teams_plays_st') IS NOT NULL
 		DROP TABLE #temp_teams_plays_st
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
-		,pff_OFFTEAM AS posession_team
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,offense AS posession_team
 		,so.ncaa_club_id AS ncaa_club_id_posession
-		,pf.pff_GSISPLAYID AS gsis_play_id
-		,pf.pff_PLAYID AS pff_play_id
-		,pff_GARBAGETIME AS garbage_time_pff
+		,pf.gsis_play_id AS gsis_play_id
+		,pf.play_id AS pff_play_id
+		,garbage_time AS garbage_time_pff
 	INTO #temp_teams_plays_st
-	FROM CFF.dbo.PffPlays pf
+	FROM #temp_cff_plays pf
 	INNER JOIN BaneProductionAnalytics.dbo.schools so
-		ON pf.pff_OFFTEAM = so.code
-	WHERE pf.pff_SPECIALTEAMSTYPE IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
-		--AND pff_NOPLAY = 0
+		ON pf.offense = so.code
+	WHERE pf.special_teams_type IN ('PUNT','KICKOFF','EXTRA POINT','FIELD GOAL')
+		--AND no_play = 0
 
 
 	-- Check if #temp_teams_game_snaps_st_no_inj exists, if it does drop it
@@ -187,7 +238,7 @@ BEGIN
 		,ii.gsis_player_id
 		,SUM(ii.currently_injured) AS currently_injured_plays
 	INTO #temp_teams_game_snaps_st_no_inj
-	FROM stage_plays_player_injuries_college ii
+	FROM college_player_play_injury_facts ii
 	INNER JOIN #temp_teams_plays_st st
 		ON ii.pff_play_id = st.pff_play_id
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
@@ -197,14 +248,14 @@ BEGIN
 	GROUP BY ii.gsis_game_key
 		,ii.gsis_player_id
 
---DROP TABLE #temp_teams_plays_st
+	--DROP TABLE #temp_teams_plays_st
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 	(1)(d)
-
-
+	
 	Join player and team special teams and garbage snaps.
 	
 	OUTPUT TABLE
@@ -212,13 +263,16 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_players_teams_game_snaps_st exists, if it does drop it
+	-- Check if #temp_players_teams_game_snaps_st exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_players_teams_game_snaps_st') IS NOT NULL
 		DROP TABLE #temp_players_teams_game_snaps_st
 
 	SELECT st.gsis_player_id
 		,st.gsis_game_key
 		,st.ncaa_club_id
+		,season
+		,season_type
+		,[week]
 		,ISNULL(snap_count_special_teams,0) AS snap_count_special_teams
 		,ISNULL(snap_count_special_teams_weighted,0) AS snap_count_special_teams_weighted
 		,ISNULL(snap_count_4_phase,0) AS snap_count_4_phase
@@ -257,67 +311,82 @@ BEGIN
 	WHERE st.gsis_player_id <> 0
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+	
 	(2)(a)
 
-
-	Use PFF and play participation to get player snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (3).
+	Use PFF and play participation to get player snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (4).
 	
 	OUTPUT TABLE
 	#temp_players_no_garbage_game_snaps
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_players_no_garbage_game_snaps_defense exists, if it does drop it
+	-- Check if #temp_players_no_garbage_game_snaps_defense exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_players_no_garbage_game_snaps_defense') IS NOT NULL
 		DROP TABLE #temp_players_no_garbage_game_snaps_defense
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,season
+		,season_type
+		,week_int AS [week]
 		,ncaa_club_id
-		,sp.pff_GSISPLAYERID AS gsis_player_id
+		,sp.gsis_player_id AS gsis_player_id
 		,COUNT(*) AS snap_count_defense_pff
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
 	INTO #temp_players_no_garbage_game_snaps_defense
-	FROM CFF.dbo.PffPlays pf
-	INNER JOIN CFF.dbo.PFFDefense sp
-		ON pf.pff_PLAYID = sp.pff_PLAYID
+	FROM #temp_cff_plays pf
+	INNER JOIN daily_build_cff_defense sp
+		ON pf.play_id = sp.play_id
 	INNER JOIN BaneProductionAnalytics.dbo.schools sc
-		ON sp.pff_TEAM = sc.code
-	WHERE pf.pff_SPECIALTEAMSTYPE = ''
-		--AND pff_NOPLAY = 0
-	GROUP BY pf.pff_GSISGAMEKEY
+		ON sp.team = sc.code
+	WHERE pf.special_teams_type IS NULL
+		--AND no_play = 0
+	GROUP BY pf.gsis_game_id
 		,ncaa_club_id
-		,sp.pff_GSISPLAYERID
+		,sp.gsis_player_id
+		,season
+		,season_type
+		,week_int
 
 
--- Check if #temp_players_no_garbage_game_snaps_offense exists, if it does drop it
+	-- Check if #temp_players_no_garbage_game_snaps_offense exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_players_no_garbage_game_snaps_offense') IS NOT NULL
 		DROP TABLE #temp_players_no_garbage_game_snaps_offense
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,season
+		,season_type
+		,week_int AS [week]
 		,ncaa_club_id
-		,sp.pff_GSISPLAYERID AS gsis_player_id
+		,sp.gsis_player_id AS gsis_player_id
 		,COUNT(*) AS snap_count_offense_pff
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
 	INTO #temp_players_no_garbage_game_snaps_offense
-	FROM CFF.dbo.PffPlays pf
-	INNER JOIN CFF.dbo.PFFOffense sp
-		ON pf.pff_PLAYID = sp.pff_PLAYID
+	FROM #temp_cff_plays pf
+	INNER JOIN daily_build_cff_offense sp
+		ON pf.play_id = sp.play_id
 	INNER JOIN BaneProductionAnalytics.dbo.schools sc
-		ON sp.pff_TEAM = sc.code
-	WHERE pf.pff_SPECIALTEAMSTYPE = ''
-		--AND pff_NOPLAY = 0
-	GROUP BY pf.pff_GSISGAMEKEY
+		ON sp.team = sc.code
+	WHERE pf.special_teams_type IS NULL
+		--AND no_play = 0
+	GROUP BY pf.gsis_game_id
 		,ncaa_club_id
-		,sp.pff_GSISPLAYERID
+		,sp.gsis_player_id
+		,season
+		,season_type
+		,week_int
 
 
--- Check if #temp_players_no_garbage_game_snaps exists, if it does drop it
+	-- Check if #temp_players_no_garbage_game_snaps exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_players_no_garbage_game_snaps') IS NOT NULL
 		DROP TABLE #temp_players_no_garbage_game_snaps
 
 	SELECT ISNULL(oo.gsis_game_key,de.gsis_game_key) AS gsis_game_key
+		,ISNULL(oo.season,de.season) AS season
+		,ISNULL(oo.season_type,de.season_type) AS season_type
+		,ISNULL(oo.[week],de.[week]) AS [week]
 		,ISNULL(oo.ncaa_club_id,de.ncaa_club_id) AS ncaa_club_id
 		,ISNULL(oo.gsis_player_id,de.gsis_player_id) AS gsis_player_id
 		,snap_count_offense_pff
@@ -333,10 +402,10 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 	(2)(b)
-
-
-	Use PFF and play participation to get team snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (3).
+	
+	Use PFF and play participation to get team snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (4).
 	
 	OUTPUT TABLE
 	#temp_teams_no_garbage_game_snaps
@@ -347,19 +416,19 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_teams_offense_plays') IS NOT NULL
 		DROP TABLE #temp_teams_offense_plays
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
-		,pff_OFFTEAM AS offense
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,offense AS offense
 		,so.ncaa_club_id AS ncaa_club_id_offense
 		,COUNT(*) AS snap_count_offense
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
 	INTO #temp_teams_offense_plays
-	FROM CFF.dbo.PffPlays pf
+	FROM #temp_cff_plays pf
 	INNER JOIN BaneProductionAnalytics.dbo.schools so
-		ON pf.pff_OFFTEAM = so.code
-	WHERE pff_SPECIALTEAMSTYPE = ''
-		--AND pff_NOPLAY = 0
-	GROUP BY  pf.pff_GSISGAMEKEY
-		,pff_OFFTEAM
+		ON pf.offense = so.code
+	WHERE special_teams_type IS NULL
+		--AND no_play = 0
+	GROUP BY pf.gsis_game_id
+		,offense
 		,so.ncaa_club_id
 
 
@@ -367,19 +436,19 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_teams_defense_plays') IS NOT NULL
 		DROP TABLE #temp_teams_defense_plays
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
-		,pff_DEFTEAM AS defense
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,defense AS defense
 		,sd.ncaa_club_id AS ncaa_club_id_defense
 		,COUNT(*) AS snap_count_defense
-		,SUM(CASE WHEN pff_GARBAGETIME = 0 THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
 	INTO #temp_teams_defense_plays
-	FROM CFF.dbo.PffPlays pf
+	FROM #temp_cff_plays pf
 	INNER JOIN BaneProductionAnalytics.dbo.schools sd
-		ON pf.pff_DEFTEAM = sd.code
-	WHERE pff_SPECIALTEAMSTYPE = ''
-		--AND pff_NOPLAY = 0
-	GROUP BY  pf.pff_GSISGAMEKEY
-		,pff_DEFTEAM
+		ON pf.defense = sd.code
+	WHERE special_teams_type IS NULL
+		--AND no_play = 0
+	GROUP BY pf.gsis_game_id
+		,defense
 		,sd.ncaa_club_id
 
 
@@ -402,6 +471,7 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 	(2)(c)
 
 
@@ -416,18 +486,18 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_teams_plays') IS NOT NULL
 		DROP TABLE #temp_teams_plays
 
-	SELECT pf.pff_GSISGAMEKEY AS gsis_game_key
-		,pff_OFFTEAM AS posession_team
+	SELECT pf.gsis_game_id AS gsis_game_key
+		,offense AS posession_team
 		,so.ncaa_club_id AS ncaa_club_id_posession
-		,pf.pff_GSISPLAYID AS gsis_play_id
-		,pf.pff_PLAYID AS pff_play_id
-		,pff_GARBAGETIME AS garbage_time_pff
+		,pf.gsis_play_id AS gsis_play_id
+		,pf.play_id AS pff_play_id
+		,garbage_time AS garbage_time_pff
 	INTO #temp_teams_plays
-	FROM CFF.dbo.PffPlays pf
+	FROM #temp_cff_plays pf
 	INNER JOIN BaneProductionAnalytics.dbo.schools so
-		ON pf.pff_OFFTEAM = so.code
-	WHERE pff_SPECIALTEAMSTYPE = ''
-		--AND pff_NOPLAY = 0
+		ON pf.offense = so.code
+	WHERE special_teams_type IS NULL
+		--AND no_play = 0
 
 
 	-- Check if #temp_teams_plays_no_inj exists, if it does drop it
@@ -442,7 +512,7 @@ BEGIN
 			ELSE 0
 		END) AS currently_injured_plays
 	INTO #temp_teams_plays_no_inj
-	FROM stage_plays_player_injuries_college ii
+	FROM college_player_play_injury_facts ii
 	INNER JOIN #temp_teams_plays st
 		ON ii.pff_play_id = st.pff_play_id
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
@@ -455,13 +525,14 @@ BEGIN
 		,ii.gsis_player_id
 		,po.[team]
 
-DROP TABLE #temp_teams_plays
+
+	DROP TABLE #temp_teams_plays
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(2)(d)
 
+	(2)(d)
 
 	Join player and team offense and defense and garbage snaps.
 	
@@ -470,12 +541,15 @@ DROP TABLE #temp_teams_plays
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_players_game_snaps_od exists, if it does drop it
+	-- Check if #temp_players_game_snaps_od exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_players_game_snaps_od') IS NOT NULL
 		DROP TABLE #temp_players_game_snaps_od
 
 	SELECT od.gsis_player_id
 		,od.gsis_game_key
+		,od.season
+		,od.season_type
+		,od.[week]
 		,od.ncaa_club_id
 		,ISNULL(od.snap_count_offense_pff,0) AS snap_count_offense
 		,ng.snap_count_offense_pff_team AS snap_count_offense_team
@@ -501,30 +575,85 @@ DROP TABLE #temp_teams_plays
 		AND od.gsis_player_id = ni.gsis_player_id
 	WHERE od.gsis_player_id <> 0
 
-
+	
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 	(3)
 
 
-	Join offense/defense to special teams for staging.
+	Find out the starters for each game.  Find the first non special teams play for each team and which players were on the field for them.  Those are your "starters."
 
 
-	STAGING TABLES:
-		stage_players_game_college_playtimes
+	OUTPUT TABLES:
+		#temp_starters
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE stage_players_game_college_playtimes
+	-- Check if #temp_starters exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_starters') IS NOT NULL
+		DROP TABLE #temp_starters
 
-	INSERT INTO stage_players_game_college_playtimes
-	SELECT od.gsis_player_id
+	SELECT pl.gsis_game_id
+		,de.play_id AS pff_play_id
+		,de.gsis_player_id
+		,de.player_id AS pff_player_id		
+	INTO #temp_starters
+	FROM #temp_cff_plays pl
+	INNER JOIN daily_build_cff_defense de
+		ON pl.play_id = de.play_id
+	WHERE team_play_order = 1
+		AND pl.gsis_game_id IS NOT NULL
+		--AND pl.gsis_play_id IS NOT NULL
+		AND gsis_player_id <> 0
+
+
+	INSERT INTO #temp_starters
+	SELECT pl.gsis_game_id
+		,de.play_id AS pff_play_id
+		,de.gsis_player_id
+		,de.player_id AS pff_player_id	
+	FROM #temp_cff_plays pl
+	INNER JOIN daily_build_cff_offense de
+		ON pl.play_id = de.play_id
+	LEFT JOIN #temp_starters ss
+		ON de.gsis_game_id = ss.gsis_game_id
+		AND de.gsis_player_id = ss.gsis_player_id
+	WHERE team_play_order = 1
+		AND pl.gsis_game_id IS NOT NULL
+		--AND pl.gsis_play_id IS NOT NULL
+		AND de.gsis_player_id <> 0
+		AND ss.gsis_player_id IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Join offense/defense to special teams for Bane.  Also join in the "starters" tags.
+
+	After you do it from the CFF tables, insert rows from NonProDB that don't already appear in the table.
+
+	Later on, during sp_bane_college_player_game_stats you check to see if there are any rows in the stat tables that don't appear in this table, and you
+	add those there.  This stored procedure runs before that one so doing it here wouldn't work.
+
+
+	OUTPUT TABLES:
+		bane_college_player_game_playtimes
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_college_player_game_playtimes exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_college_player_game_playtimes') IS NOT NULL
+		DROP TABLE #temp_college_player_game_playtimes
+
+	SELECT DISTINCT od.gsis_player_id
 		,pl.id AS bane_player_id
 		,od.gsis_game_key
 		,od.ncaa_club_id
-		,ga.season
-		,ga.season_type
-		,ga.[week]
+		,od.season
+		,od.season_type
+		,od.[week]
 		,od.snap_count_offense
 		,snap_count_offense_team
 		,od.snap_count_defense
@@ -577,6 +706,12 @@ DROP TABLE #temp_teams_plays
 		,ISNULL(snap_count_offense_no_garbage_inj_team,0) AS snap_count_offense_no_garbage_inj_team
 		,ISNULL(snap_count_defense_no_garbage_inj_team,0) AS snap_count_defense_no_garbage_inj_team
 		,ISNULL(snap_count_4_phase_no_garbage_inj_team,0) AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,CASE WHEN ss.gsis_player_id IS NOT NULL THEN 'started'
+			WHEN snap_count_offense + snap_count_defense + ISNULL(snap_count_special_teams,0) > 0 THEN 'played'
+			ELSE NULL
+		END AS status_game_played
+	INTO #temp_college_player_game_playtimes
 	FROM #temp_players_game_snaps_od od
 	LEFT JOIN #temp_players_teams_game_snaps_st st
 		ON od.gsis_game_key = st.gsis_game_key
@@ -586,10 +721,267 @@ DROP TABLE #temp_teams_plays
 		AND pl.is_deleted = 0
 	LEFT JOIN BaneProductionAnalytics.dbo.positions po
 		ON pl.position_id = po.id
-	LEFT JOIN stage_games_pff_college ga
-		ON od.gsis_game_key = ga.nfl_game_key
+	LEFT JOIN #temp_starters ss
+		ON od.gsis_game_key = ss.gsis_game_id
+		AND od.gsis_player_id = ss.gsis_player_id
 
 
+--Add in games where a player has no offense/defense snaps, only special  teams snaps
+	INSERT INTO #temp_college_player_game_playtimes
+	SELECT DISTINCT st.gsis_player_id
+		,pl.id AS bane_player_id
+		,st.gsis_game_key
+		,st.ncaa_club_id
+		,st.season
+		,st.season_type
+		,st.[week]
+		,0 AS snap_count_offense
+		,snap_count_offense_pff_team AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,snap_count_defense_pff_team AS snap_count_defense_team
+		,ISNULL(st.snap_count_special_teams,0) AS snap_count_special_teams
+		,ISNULL(st.snap_count_special_teams_team,0) AS snap_count_special_teams_team
+		,ISNULL(st.snap_count_4_phase_team,0) AS snap_count_4_phase_team
+		,ISNULL(st.snap_count_special_teams_weighted,0) AS snap_count_special_teams_weighted
+		,ISNULL(st.snap_count_special_teams_weighted_team,0) AS snap_count_special_teams_weighted_team
+		,ISNULL(st.snap_count_4_phase,0) AS snap_count_4_phase
+		,0 + ISNULL(st.snap_count_special_teams,0) AS snap_count_all
+		,0 AS snap_count_od
+		,0 + ISNULL(st.snap_count_special_teams_weighted,0) AS snap_count_weighted
+		,CAST((0 + 0 + st.snap_count_special_teams) AS FLOAT)
+		/ NULLIF(CAST((CASE WHEN po.[team] = 'DEF' THEN snap_count_defense_team + ISNULL(snap_count_special_teams_team,0)
+				WHEN po.[team] = 'OFF' THEN snap_count_offense_team + ISNULL(snap_count_special_teams_team,0)
+				WHEN po.[team] = 'ST' AND ISNULL(snap_count_special_teams_weighted,0) > (0 + 0) THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN ISNULL(snap_count_special_teams,0) > 0 THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				ELSE NULL
+				END) AS FLOAT),0)
+		AS equivalent_games_no_weight
+		,CAST((0 + 0 + ISNULL(snap_count_special_teams_weighted,0)) AS FLOAT)
+		/ NULLIF(CAST((CASE WHEN po.[team] = 'DEF' THEN snap_count_defense_team
+				WHEN po.[team] = 'OFF' THEN snap_count_offense_team
+				WHEN po.[team] = 'ST' AND ISNULL(snap_count_special_teams_weighted,0) > (0 + 0) THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN ISNULL(snap_count_special_teams_weighted,0) > 0 THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				ELSE NULL
+				END) AS FLOAT),0)
+		AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,ng.snap_count_offense_no_garbage_team 
+		,0 AS snap_count_defense_no_garbage
+		,ng.snap_count_defense_no_garbage_team
+		,ISNULL(snap_count_4_phase_no_garbage,0) AS snap_count_4_phase_no_garbage
+		,ISNULL(snap_count_4_phase_no_garbage_team,0) AS snap_count_4_phase_no_garbage_team
+		,ISNULL(ng.snap_count_offense_no_garbage_team,0) AS snap_count_offense_no_garbage_inj_team
+		,ISNULL(ng.snap_count_defense_no_garbage_team,0) AS snap_count_defense_no_garbage_inj_team
+		,ISNULL(snap_count_4_phase_no_garbage_inj_team,0) AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'played' AS status_game_played 
+	FROM #temp_players_teams_game_snaps_st st
+	LEFT JOIN #temp_teams_no_garbage_game_snaps ng
+		ON st.gsis_game_key = ng.gsis_game_key
+		AND st.ncaa_club_id = ng.ncaa_club_id
+	LEFT JOIN BaneProductionAnalytics.dbo.players pl
+		ON st.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN #temp_players_game_snaps_od od
+		ON st.gsis_player_id = od.gsis_player_id
+		AND st.gsis_game_key = od.gsis_game_key
+	WHERE od.gsis_player_id IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)(a)
+
+
+	Insert any NonProDB games that aren't covered by CFF.  First find the all star game club codes so you can exclude those games.
+
+
+	OUTPUT TABLES:
+		bane_college_player_game_playtimes
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_all_star_clubs exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_all_star_clubs') IS NOT NULL
+		DROP TABLE #temp_all_star_clubs
+
+	SELECT ClubKey
+	INTO #temp_all_star_clubs
+	FROM NonProDB.dbo.Club cl
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON cl.TeamCode = sc.code
+	WHERE cl.Division = 'other'
+		OR Club_Id IN (29013,29014)--until clubdb updates their division
+
+	INSERT INTO #temp_college_player_game_playtimes
+	SELECT DISTINCT [gsisPlayer_ID] AS gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.[GameKey] AS gsis_game_key
+		,cl.Club_ID AS ncaa_club_id
+		,ga.season
+		,ga.Season_Type AS season_type
+		,ga.[week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team 
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,CASE WHEN [Status] = 'S' THEN 'started'
+			WHEN [Status] = 'P' THEN 'played'
+			ELSE NULL
+		END AS status_game_played
+	FROM [NonProDB].[dbo].[GameRoster] gr
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON gr.gsisPlayer_ID = ex.CollegeGSISID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON gr.GameKey = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsisPlayer_ID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	INNER JOIN [NonProDB].[dbo].[Club] cl
+		ON gr.ClubKey = cl.ClubKey
+	LEFT JOIN #temp_college_player_game_playtimes cp
+		ON gr.GameKey = cp.gsis_game_key
+		AND gr.gsisPlayer_ID = cp.gsis_player_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON cl.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND gr.gsisPlayer_ID NOT LIKE '%[^0-9]%'
+		AND gr.gsisPlayer_ID NOT LIKE ''
+		AND gr.gsisPlayer_ID IS NOT NULL
+		AND gr.gsisPlayer_ID <> '0'
+		AND cp.gsis_game_key IS NULL
+		AND ac.ClubKey IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Update and insert into the bane tables.
+
+
+	OUTPUT TABLES:
+		bane_college_player_game_playtimes
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [bane_college_player_game_playtimes]
+	SET snap_count_offense = te.snap_count_offense
+		,snap_count_offense_team = te.snap_count_offense_team
+		,snap_count_defense = te.snap_count_defense
+		,snap_count_defense_team = te.snap_count_defense_team
+		,snap_count_special_teams = te.snap_count_special_teams
+		,snap_count_special_teams_team = te.snap_count_special_teams_team
+		,snap_count_4_phase_team = te.snap_count_4_phase_team
+		,snap_count_special_teams_weighted = te.snap_count_special_teams_weighted
+		,snap_count_special_teams_weighted_team = te.snap_count_special_teams_weighted_team
+		,snap_count_4_phase = te.snap_count_4_phase
+		,snap_count_all = te.snap_count_all
+		,snap_count_od = te.snap_count_od
+		,snap_count_weighted = te.snap_count_weighted
+		,equivalent_games_no_weight = te.equivalent_games_no_weight
+		,equivalent_games = te.equivalent_games
+		,equivalent_games_off_def = te.equivalent_games_off_def
+		,snap_count_offense_no_garbage = te.snap_count_offense_no_garbage
+		,snap_count_offense_no_garbage_team = te.snap_count_offense_no_garbage_team
+		,snap_count_defense_no_garbage = te.snap_count_defense_no_garbage
+		,snap_count_defense_no_garbage_team = te.snap_count_defense_no_garbage_team
+		,snap_count_4_phase_no_garbage = te.snap_count_4_phase_no_garbage
+		,snap_count_4_phase_no_garbage_team = te.snap_count_4_phase_no_garbage_team
+		,snap_count_offense_no_garbage_inj_team = te.snap_count_offense_no_garbage_inj_team
+		,snap_count_defense_no_garbage_inj_team = te.snap_count_defense_no_garbage_inj_team
+		,snap_count_4_phase_no_garbage_inj_team = te.snap_count_4_phase_no_garbage_inj_team
+		,updated_at = te.updated_at
+		,status_game_played = te.status_game_played
+		,bane_player_id = te.bane_player_id
+		,ncaa_club_id = te.ncaa_club_id
+	FROM #temp_college_player_game_playtimes te
+	WHERE [bane_college_player_game_playtimes].gsis_player_id = te.gsis_player_id
+		AND [bane_college_player_game_playtimes].gsis_game_key = te.gsis_game_key
+		AND ([bane_college_player_game_playtimes].snap_count_offense <> te.snap_count_offense
+		OR [bane_college_player_game_playtimes].snap_count_offense_team <> te.snap_count_offense_team
+		OR [bane_college_player_game_playtimes].snap_count_defense <> te.snap_count_defense
+		OR [bane_college_player_game_playtimes].snap_count_defense_team <> te.snap_count_defense_team
+		OR [bane_college_player_game_playtimes].snap_count_special_teams <> te.snap_count_special_teams
+		OR [bane_college_player_game_playtimes].snap_count_special_teams_team <> te.snap_count_special_teams_team
+		OR [bane_college_player_game_playtimes].snap_count_4_phase_team <> te.snap_count_4_phase_team
+		OR ABS([bane_college_player_game_playtimes].snap_count_special_teams_weighted - te.snap_count_special_teams_weighted) > 0.5
+		OR ABS([bane_college_player_game_playtimes].snap_count_special_teams_weighted_team - te.snap_count_special_teams_weighted_team) > 0.5
+		OR [bane_college_player_game_playtimes].snap_count_4_phase <> te.snap_count_4_phase
+		OR [bane_college_player_game_playtimes].snap_count_all <> te.snap_count_all
+		OR [bane_college_player_game_playtimes].snap_count_od <> te.snap_count_od
+		OR ABS([bane_college_player_game_playtimes].snap_count_weighted - te.snap_count_weighted) > 0.5
+		OR ABS([bane_college_player_game_playtimes].equivalent_games_no_weight - te.equivalent_games_no_weight) > 0.5
+		OR ABS([bane_college_player_game_playtimes].equivalent_games - te.equivalent_games) > 0.5
+		OR ABS([bane_college_player_game_playtimes].equivalent_games_off_def - te.equivalent_games_off_def) > 0.5
+		OR [bane_college_player_game_playtimes].snap_count_offense_no_garbage <> te.snap_count_offense_no_garbage
+		OR [bane_college_player_game_playtimes].snap_count_offense_no_garbage_team <> te.snap_count_offense_no_garbage_team
+		OR [bane_college_player_game_playtimes].snap_count_defense_no_garbage <> te.snap_count_defense_no_garbage
+		OR [bane_college_player_game_playtimes].snap_count_defense_no_garbage_team <> te.snap_count_defense_no_garbage_team
+		OR [bane_college_player_game_playtimes].snap_count_4_phase_no_garbage <> te.snap_count_4_phase_no_garbage
+		OR [bane_college_player_game_playtimes].snap_count_4_phase_no_garbage_team <> te.snap_count_4_phase_no_garbage_team
+		OR [bane_college_player_game_playtimes].snap_count_offense_no_garbage_inj_team <> te.snap_count_offense_no_garbage_inj_team
+		OR [bane_college_player_game_playtimes].snap_count_defense_no_garbage_inj_team <> te.snap_count_defense_no_garbage_inj_team
+		OR [bane_college_player_game_playtimes].snap_count_4_phase_no_garbage_inj_team <> te.snap_count_4_phase_no_garbage_inj_team
+		OR ISNULL([bane_college_player_game_playtimes].status_game_played,'') <> ISNULL(te.status_game_played,'')
+		OR ISNULL([bane_college_player_game_playtimes].bane_player_id,-999) <> ISNULL(te.bane_player_id,-999)
+		OR ISNULL([bane_college_player_game_playtimes].ncaa_club_id,-999) <> ISNULL(te.ncaa_club_id,-999)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT te.*
+	FROM #temp_college_player_game_playtimes te
+	LEFT JOIN [bane_college_player_game_playtimes] ba
+		ON te.gsis_player_id = ba.gsis_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.gsis_player_id IS NULL
+
+
+--Delete any no longer existing rows --since you add to this table after the stats tables, you shouldn't delete here
+	--DELETE FROM [bane_college_player_game_playtimes]
+	--FROM [bane_college_player_game_playtimes] ba
+	--LEFT JOIN #temp_college_player_game_playtimes te
+		--ON ba.gsis_player_id = te.gsis_player_id
+		--AND ba.gsis_game_key = te.gsis_game_key
+	--WHERE te.gsis_player_id IS NULL
+		--AND ba.season >= @iSeason
+
+	--ALTER INDEX ALL ON [bane_college_player_game_playtimes] REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_college_player_game_playtimes
+
+
+	
 
 	RETURN @oReturnCD
 		
