@@ -1,0 +1,318 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_gameweek_status]    Script Date: 5/11/2022 2:33:15 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_analysis_players_gameweek_status] (@iSeason INT) AS
+
+
+/*********************************************************************************
+
+Procedure Name:	sp_analysis_players_gameweek_status 
+Author:			Jeremy Parks
+Creation Date:	7/27/2016
+Description:       
+
+
+	Combines the stage_seasons_week_dates, stage_players_roster_status_by_date 
+	and stage_players_game_injuries table to create the analysis_players_gameweek_status table.
+	This shows status and injuries by game week.
+			
+Input Parameters:
+	@iSeason - Season to be refreshed
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date        SE		Description
+
+8/30/2016	JP		Added code to account for free agents that occur after the game week has already started.  Listed as Active with
+					a club but were released before the game.	
+11/7/2016	JP		Added the active_game_count field to the analysis_players_gameweek_status table
+5/29/2020	JP		Changed the logic to remove players who are free agents for more then 730 days 
+5/29/2020	JP		Changed the logic to remove players who retired before the season instead of 2 
+					years prior
+
+
+**********************************************************************************/
+
+BEGIN 
+	
+	--declare @iSeason int = 2019 
+
+
+	-- Declare program variables
+	declare 
+		@vTransactionDeleteDate DATETIME
+
+	-- Set the transaction delete date to 2 seasons ago
+	set @vTransactionDeleteDate = CAST('1/1/' + CAST((@iSeason - 2) AS varchar(10)) AS datetime)
+
+	-- If the temp table exists - drop it
+	if object_id('tempdb..#temp_players_gameweek_status') is not null
+		drop table #temp_players_gameweek_status
+
+	-- Create the temp table
+	select * into #temp_players_gameweek_status from [dbo].[analysis_players_gameweek_status] where 1=2
+
+	-- Insert the status records based on the start of the nfl game week
+	insert  #temp_players_gameweek_status 
+		([nfl_player_id]
+           ,[season]
+           ,[season_type]
+           ,[week]
+           ,[nfl_game_week_begin]
+           ,[nfl_game_week_end]
+           ,[team_week_begin]
+           ,[team_week_end]
+           ,[status_start_date]
+           ,[status_end_date]
+		   ,[status_roster_simple]
+		   ,[club_id])
+	select 
+		py.PlayerID as nfl_player_id , 
+		wd.season, 
+		wd.season_type, 
+		wd.week, 
+		wd.nfl_game_week_begin , 
+		wd.nfl_game_week_end,  
+		wd.Team_week_begin, 
+		wd.team_week_end, 
+		tt.[status_start_date] as status_start_date, 
+		tt.[status_end_date]  as status_end_date, 
+		tt.status_roster_simple , 
+		tt.nfl_club_id_result
+	from stage_seasons_week_dates wd
+	inner join [stage_players_roster_status_by_date] tt on
+		(wd.nfl_game_Week_begin between status_start_date and isnull (status_end_date, getdate()))  
+	inner join ClubDB.dbo.PlayerExtract py on 
+		py.PlayerID = tt.nfl_player_id
+	where 
+	wd.Season = @iSeason 
+	order by team_week_end
+
+/*
+	-- Remove records for players who have been Free Agents since before the transaction delete date
+	delete from #temp_players_gameweek_status 
+	where 
+		status_roster_simple = 'FREEAGENT'
+		and [status_start_date] < @vTransactionDeleteDate 
+		and not exists (select * from #temp_players_gameweek_status tpgc where tpgc.season = @iSeason and tpgc.nfl_player_id = #temp_players_gameweek_status.nfl_player_id and tpgc.status_roster_simple <> 'FREEAGENT')
+		and season = @iSeason
+*/
+
+	-- Change delete to more then 730 days since player became a freeagent
+	delete 
+	from #temp_players_gameweek_status 
+	where 
+		status_roster_simple = 'FREEAGENT'
+		and DATEDIFF(DAY,status_start_date,nfl_game_week_begin) > 730
+		and not exists (select * from #temp_players_gameweek_status tpgc where tpgc.season = @iSeason and tpgc.nfl_player_id = #temp_players_gameweek_status.nfl_player_id and tpgc.status_roster_simple <> 'FREEAGENT')
+		and season = @iSeason
+			
+
+
+/*			
+	-- Remove records for reired players from before the transaction delete date
+	delete from #temp_players_gameweek_status 
+	where 
+		status_roster_simple = 'RETIRED'
+		and [status_start_date] < @vTransactionDeleteDate 
+		and not exists (select * from #temp_players_gameweek_status tpgc where tpgc.season = 2015 and tpgc.nfl_player_id = #temp_players_gameweek_status.nfl_player_id and tpgc.status_roster_simple <> 'RETIRED')
+*/
+
+	-- Remove records for reired players from before the current season 
+	delete from #temp_players_gameweek_status 
+	where 
+		status_roster_simple = 'RETIRED'
+		and status_start_date < (select min(nfl_game_week_begin) from #temp_players_gameweek_status)
+		and not exists (select * from #temp_players_gameweek_status tpgc where tpgc.season = 2015 and tpgc.nfl_player_id = #temp_players_gameweek_status.nfl_player_id and tpgc.status_roster_simple <> 'RETIRED')
+
+
+
+	-- Update the actual game information for the players
+	update #temp_players_gameweek_status
+		set status_roster_simple = tt.status_roster_simple, 
+		game_datetime = gm.Game_Date, 
+		nfl_game_key = gm.GameKey, 
+		club_id = gr.clubid, 
+		status_game_played = 
+			case 
+				when gr.playerstatus = 'Did not play' then 'did not play'
+				when gr.playerstatus = 'Injured - Did not pl' then 'injured - did not play'
+				when gr.playerstatus = 'Injured - Did not play' then 'injured - did not play'
+				when gr.playerstatus = 'Injured Reserve' then 'injured reserve'
+				when gr.playerstatus = 'Not Active' then 'not active'
+				when gr.playerstatus = 'Played' then 'played'
+				when gr.playerstatus = 'Starter' then 'started'
+				when gr.playerstatus = 'SUB' then 'substitute'
+				else gr.playerstatus 
+			end
+	from 
+		ProDB.dbo.Game gm 
+		inner join ClubDB.dbo.GameRoster gr on gm.GameKey = gr.Gamekey
+		inner join #temp_players_gameweek_status pgw on pgw.week = gm.Week and pgw.nfl_player_id = gr.PlayerID and pgw.season = gm.Season and pgw.season_type = gm.Season_Type
+		inner join [stage_players_roster_status_by_date] tt on
+			(gm.Game_Date between tt.status_start_date and isnull (tt.status_end_date, getdate())) 
+			and  tt.nfl_player_id = pgw.nfl_player_id
+	where gm.Season = @iSeason
+	and gm.LeagueType = 'nfl'
+
+
+	-- Update the injury information
+	update #temp_players_gameweek_status 
+		set [injury_status_week] = gi.[injury_status_week], 
+		[injury_text_week] = gi.[injury_text_week], 
+		[practices_missed] = gi.[practices_missed]
+	from stage_players_game_injuries gi
+		inner join ProDB.dbo.Game gm on gm.GameKey = gi.nfl_game_key and gm.LeagueType = 'nfl'
+		inner join #temp_players_gameweek_status gw on gw.season = gm.Season and gw.week = gm.Week and gw.nfl_player_id = gi.nfl_player_id and gw.season_type = gm.Season_Type
+
+
+	-- Since we built for status at the start of game week, account for players who were waived or released after the game week started 
+	-- but before the club they are tied to actually played a game
+	update #temp_players_gameweek_status 
+		Set status_roster_simple = rsd.status_roster_simple, 
+		club_id = NULL
+	from 
+		#temp_players_gameweek_status gs, 
+		(select distinct gamekey, season, clubid from ClubDB.dbo.GameRoster ) gmr, 
+		ProDB.dbo.Game gm, 
+		stage_players_roster_status_by_date rsd
+	where gs.status_roster_simple = 'ACTIVE' and Club_ID is not null
+	and nfl_game_key is null
+	and gs.club_id = gmr.ClubID
+	and gs.season = gmr.season
+	and gmr.GameKey = gm.GameKey
+	and gs.week = gm.Week
+	and gs.season = gm.Season
+	and gm.Season_Type  = gs.season_type
+	and gs.nfl_player_id = rsd.nfl_player_id
+	and gm.Game_Date between rsd.status_start_date and isnull (rsd.status_end_date, getdate())
+	and (rsd.status_roster_simple = 'FREEAGENT' or rsd.status_roster_simple = 'WAIVERS')
+	and gm.LeagueType = 'nfl'
+
+	-- If players were set to inactive on game day - The transaction will not show up until the next day from the league.
+	-- Override this value if the game roster status is inactive
+	update #temp_players_gameweek_status
+		SET status_roster_simple = 'INACTIVE'
+	where season_type = 'REG' 
+	and status_roster_simple = 'ACTIVE' and status_game_played = 'not active'
+
+	-- Added for game key for players even if they don't play, as long as they are not retired.
+	update #temp_players_gameweek_status 
+		Set status_roster_simple = rsd.status_roster_simple, 
+		nfl_game_key = gmr.Gamekey, 
+		game_datetime = gm.Game_Date
+	from 
+		#temp_players_gameweek_status gs, 
+		(select distinct gamekey, season, clubid from ClubDB.dbo.GameRoster ) gmr, 
+		ProDB.dbo.Game gm, 
+		stage_players_roster_status_by_date rsd
+	where gs.status_roster_simple <> 'RETIRED' 
+	and Club_ID is not null
+	and nfl_game_key is null
+	and gs.club_id = gmr.ClubID
+	and gs.season = gmr.season
+	and gmr.GameKey = gm.GameKey
+	and gs.week = gm.Week
+	and gs.season = gm.Season
+	and gm.Season_Type  = gs.season_type
+	and gs.nfl_player_id = rsd.nfl_player_id
+	and gm.Game_Date between rsd.status_start_date and isnull (rsd.status_end_date, getdate())
+	and gm.LeagueType = 'nfl'
+
+	-- JP 11/7/2016 Change
+	-- Get the Active game order for the current season by season type and player
+	select distinct [nfl_player_id], season, season_type, week, nfl_game_key , ROW_NUMBER() OVER (partition by nfl_player_id, season, season_type ORDER BY (game_datetime) ASC)  as active_game_count
+	into #temp_order
+	from #temp_players_gameweek_status
+	where status_roster_simple = 'Active'
+	and nfl_game_key is not null
+	and season = @iSeason
+
+	-- Update the temp table with this order
+	update #temp_players_gameweek_status set  
+	active_game_count =  #temp_order.active_game_count
+	from #temp_order
+	where #temp_order.nfl_player_id = #temp_players_gameweek_status.nfl_player_id
+	and #temp_order.nfl_game_key = #temp_players_gameweek_status.nfl_game_key
+
+
+	-- Delete the existing records from the analysis table
+	delete from analysis_players_gameweek_status 
+	where season = @iSeason
+
+	-- Insert the updated records
+	insert into analysis_players_gameweek_status 
+		([nfl_player_id]
+		,[season]
+		,[season_type]
+		,[week]
+		,[nfl_game_week_begin]
+		,[nfl_game_week_end]
+		,[team_week_begin]
+		,[team_week_end]
+		,[status_start_date]
+		,[status_end_date]
+		,[status_roster_simple]
+		,[injury_status_week]
+		,[injury_text_week]
+		,[practices_missed]
+		,[game_datetime]
+		,[status_game_played]
+		,[nfl_game_key]
+		,[club_id]
+		,[active_game_count])
+	select  
+		[nfl_player_id]
+		,[season]
+		,[season_type]
+		,[week]
+		,[nfl_game_week_begin]
+		,[nfl_game_week_end]
+		,[team_week_begin]
+		,[team_week_end]
+		,[status_start_date]
+		,[status_end_date]
+		,[status_roster_simple]
+		,[injury_status_week]
+		,[injury_text_week]
+		,[practices_missed]
+		,[game_datetime]
+		,[status_game_played]
+		,[nfl_game_key]
+		,[club_id]
+		,[active_game_count]
+	from #temp_players_gameweek_status
+
+
+END
+
+
+
+
+
+
+
+
+
+
+
+
+
+GO
+
+
