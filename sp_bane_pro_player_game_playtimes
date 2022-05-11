@@ -1,0 +1,886 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_stage_players_game_playtime]    Script Date: 5/11/2022 2:05:04 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER  PROCEDURE [dbo].[sp_stage_players_game_playtime] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_stage_players_game_playtime 
+Author:			Corey Krawiec
+Creation Date:	9/22/2016
+Description:       
+
+	This program is for creating a player game playtime table.  We have that elsewhere but this
+	also calculates the "Equivalent Games" play time statistic.  Basically it 
+	takes the play percentage each game (4 phase special teams worth 0.4 of a regular play, 
+	other special teams worth 0.1 of a regular play) and adds that up for all games in a season.
+
+	So hypothetically, if a player plays 100% of the snaps in all 16 games, he would have 16 
+	equivalent games.  A player can have more than 16 games played based on his special teams 
+	participation going in the numerator but not the denominator.
+
+	We are creating a staging table with all this information so it is all in one easy to access place.
+
+	For season level playtime and equivalent games, there is a view stage_players_season_playtime
+
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+BEGIN 
+
+
+	SET @oReturnCD = 0 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)(a)
+
+
+	Find the player's game special team snap counts.  These get summed manually so we can calssify what type of special teams play.
+
+	OUTPUT TABLE
+	#temp_players_game_snaps_st
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_players_game_snaps_st exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_players_game_snaps_st') IS NOT NULL
+		DROP TABLE #temp_players_game_snaps_st
+
+	SELECT pp.GameKey AS nfl_game_key
+		  ,nfl_club_id
+		  ,pp.PlayerID AS nfl_player_id
+		  ,COUNT(*) AS snap_count_special_teams
+		  ,SUM(CASE WHEN STPlayType IN (3,5) THEN 0.4 
+					WHEN STPlayType IN (4,6) THEN 0.1 
+					ELSE 0 
+				END) AS snap_count_special_teams_weighted
+		  ,SUM(CASE WHEN STPlayType IN (3,5) THEN 1 ELSE 0 END) AS snap_count_4_phase
+		  ,SUM(CASE WHEN STPlayType = 3 THEN 1 ELSE 0 END) AS snap_count_punt
+		  ,SUM(CASE WHEN STPlayType = 5 THEN 1 ELSE 0 END) AS snap_count_kickoff
+		  ,SUM(CASE WHEN STPlayType IN (4,6) THEN 1 ELSE 0 END) AS snap_count_field_goal
+		  ,SUM(CASE WHEN garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND STPlayType IN (3,5) THEN 0.4 
+					WHEN garbage_time = 0 AND STPlayType IN (4,6) THEN 0.1 
+					ELSE 0 
+				END) AS snap_count_special_teams_weighted_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND STPlayType IN (3,5) THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND STPlayType = 3 THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND STPlayType = 5 THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage
+		  ,SUM(CASE WHEN garbage_time = 0 AND STPlayType IN (4,6) THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage
+	INTO #temp_players_game_snaps_st
+	FROM [ClubDB].[dbo].[PlayerParticipation] pp
+	INNER JOIN [ProDB].[dbo].[PlayList] pl
+		ON pp.GameKey = pl.GameKey
+		AND pp.PlayID = pl.PlayID
+	LEFT JOIN [PFFUltimate].dbo.plays pf
+		ON pp.GameKey = pf.gsis_game_id
+		AND pp.PlayId = pf.gsis_play_id
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON (CASE WHEN pp.ClubCode = 'SL' THEN 'LA' 
+				WHEN pp.ClubCode = 'SD' THEN 'LAC'
+				WHEN pp.ClubCode = 'OAK' THEN 'LV'
+				ELSE pp.ClubCode 
+			END) = cl.code
+	WHERE SpecialTeamsPlay = 1
+		AND STPlayType IN (3,4,5,6)
+		AND UPPER(PlayDescription) NOT LIKE '%NULLIFIED%'
+		AND UPPER(PlayDescription) NOT LIKE '%NO PLAY%'
+		AND UPPER(PlayDescription) NOT LIKE '%DELAY OF GAME%'
+	GROUP BY pp.GameKey
+		,nfl_club_id
+		,pp.PlayerID
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)(b)
+
+	Find the team's game special team snap counts.
+
+	First get the distinct team plays then count them up.
+
+	OUTPUT TABLE
+	#temp_teams_game_snaps_st
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_teams_plays_st exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_plays_st') IS NOT NULL
+		DROP TABLE #temp_teams_plays_st
+
+	SELECT DISTINCT pp.GameKey AS nfl_game_key
+		  ,nfl_club_id
+		  ,pp.ClubCode AS club_code
+		  ,pp.PlayID AS nfl_play_id
+		  ,STPlayType AS special_teams_play_type
+		  ,garbage_time AS pff_garbage_time
+	INTO #temp_teams_plays_st
+	FROM [ClubDB].[dbo].[PlayerParticipation] pp
+	INNER JOIN [ProDB].[dbo].[PlayList] pl
+		ON pp.GameKey = pl.GameKey
+		AND pp.PlayID = pl.PlayID
+	LEFT JOIN [PFFUltimate].dbo.plays pf
+		ON pp.GameKey = pf.gsis_game_id
+		AND pp.PlayId = pf.gsis_play_id
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON (CASE WHEN pp.ClubCode = 'SL' THEN 'LA' 
+				WHEN pp.ClubCode = 'SD' THEN 'LAC'
+				WHEN pp.ClubCode = 'OAK' THEN 'LV'
+				ELSE pp.ClubCode 
+			END) = cl.code
+	WHERE SpecialTeamsPlay = 1
+		AND STPlayType IN (3,4,5,6)
+		AND UPPER(PlayDescription) NOT LIKE '%NULLIFIED%'
+		AND UPPER(PlayDescription) NOT LIKE '%NO PLAY%'
+		AND UPPER(PlayDescription) NOT LIKE '%DELAY OF GAME%'
+
+
+	-- Check if #temp_teams_game_snaps_st exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_game_snaps_st') IS NOT NULL
+		DROP TABLE #temp_teams_game_snaps_st
+
+	SELECT nfl_game_key
+		  ,nfl_club_id
+		  ,club_code
+		  ,COUNT(*) AS snap_count_special_teams
+		  ,SUM(CASE WHEN special_teams_play_type IN (3,5) THEN 0.4 
+					WHEN special_teams_play_type IN (4,6) THEN 0.1 
+					ELSE 0 
+				END) AS snap_count_special_teams_weighted
+		  ,SUM(CASE WHEN special_teams_play_type IN (3,5) THEN 1 ELSE 0 END) AS snap_count_4_phase
+		  ,SUM(CASE WHEN special_teams_play_type = 3 THEN 1 ELSE 0 END) AS snap_count_punt
+		  ,SUM(CASE WHEN special_teams_play_type = 5 THEN 1 ELSE 0 END) AS snap_count_kickoff
+		  ,SUM(CASE WHEN special_teams_play_type IN (4,6) THEN 1 ELSE 0 END) AS snap_count_field_goal
+		  ,SUM(CASE WHEN pff_garbage_time = 0 THEN 1 ELSE 0 END) AS snap_count_special_teams_no_garbage
+		  ,SUM(CASE WHEN pff_garbage_time = 0 AND special_teams_play_type IN (3,5) THEN 0.4 
+					WHEN pff_garbage_time = 0 AND special_teams_play_type IN (4,6) THEN 0.1 
+					ELSE 0 
+				END) AS snap_count_special_teams_weighted_no_garbage
+		  ,SUM(CASE WHEN pff_garbage_time = 0 AND special_teams_play_type IN (3,5) THEN 1 ELSE 0 END) AS snap_count_4_phase_no_garbage
+		  ,SUM(CASE WHEN pff_garbage_time = 0 AND special_teams_play_type = 3 THEN 1 ELSE 0 END) AS snap_count_punt_no_garbage
+		  ,SUM(CASE WHEN pff_garbage_time = 0 AND special_teams_play_type = 5 THEN 1 ELSE 0 END) AS snap_count_kickoff_no_garbage
+		  ,SUM(CASE WHEN pff_garbage_time = 0 AND special_teams_play_type IN (4,6) THEN 1 ELSE 0 END) AS snap_count_field_goal_no_garbage
+	INTO #temp_teams_game_snaps_st
+	FROM #temp_teams_plays_st st
+	GROUP BY nfl_game_key
+		,nfl_club_id
+		,club_code
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)(c)
+
+	Sum up the 4 phase special teams snaps a player missed cause he was injured so you can take them out of the injury sums later.
+
+	OUTPUT TABLE
+	#temp_teams_game_snaps_st_no_inj
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_teams_game_snaps_st_no_inj exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_game_snaps_st_no_inj') IS NOT NULL
+		DROP TABLE #temp_teams_game_snaps_st_no_inj
+
+	SELECT nfl_game_key
+		,ii.nfl_player_id
+		,nfl_club_id
+		,SUM(ii.currently_injured) AS currently_injured_plays
+	INTO #temp_teams_game_snaps_st_no_inj
+	FROM stage_plays_player_injuries ii
+	INNER JOIN #temp_teams_plays_st st
+		ON ii.gsis_game_key = st.nfl_game_key
+		AND ii.gsis_play_id = st.nfl_play_id
+		AND ii.club_code = st.club_code
+	WHERE special_teams_play_type IN (3,5)
+	GROUP BY nfl_game_key
+		,ii.nfl_player_id
+		,nfl_club_id
+
+	DROP TABLE #temp_teams_plays_st
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)(a)
+
+
+	Use PFF and play participation to get player snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (3).
+	
+	OUTPUT TABLE
+	#temp_players_no_garbage_game_snaps
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_players_no_garbage_game_snaps exists, if it does drop it
+		IF OBJECT_ID('tempdb..#temp_players_no_garbage_game_snaps') IS NOT NULL
+			DROP TABLE #temp_players_no_garbage_game_snaps
+
+	SELECT pp.GameKey AS nfl_game_key
+		,nfl_club_id
+		,pp.PlayerID AS nfl_player_id
+		,SUM(CASE WHEN ClubCode = PossessionTeam THEN 1 ELSE 0 END) AS snap_count_offense_pff
+		,SUM(CASE WHEN ClubCode <> PossessionTeam THEN 1 ELSE 0 END) AS snap_count_defense_pff
+		,SUM(CASE WHEN garbage_time = 0 AND ClubCode = PossessionTeam THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 AND ClubCode <> PossessionTeam THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
+	INTO #temp_players_no_garbage_game_snaps
+	FROM [ClubDB].[dbo].[PlayerParticipation] pp
+	INNER JOIN [ProDB].[dbo].[PlayList] pl
+		ON pp.GameKey = pl.GameKey
+		AND pp.PlayID = pl.PlayID
+	LEFT JOIN [PFFUltimate].dbo.plays pf
+		ON pp.GameKey = pf.gsis_game_id
+		AND pp.PlayId = pf.gsis_play_id
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON (CASE WHEN pp.ClubCode = 'SL' THEN 'LA' 
+				WHEN pp.ClubCode = 'SD' THEN 'LAC'
+				WHEN pp.ClubCode = 'OAK' THEN 'LV'
+				ELSE pp.ClubCode 
+			END) = cl.code
+	WHERE SpecialTeamsPlay = 0
+		AND UPPER(PlayDescription) NOT LIKE '%NULLIFIED%'
+		AND UPPER(PlayDescription) NOT LIKE '%NO PLAY%'
+		AND UPPER(PlayDescription) NOT LIKE '%DELAY OF GAME%'
+	GROUP BY pp.GameKey
+		,nfl_club_id
+		,pp.PlayerID
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)(b)
+
+
+	Use PFF and play participation to get team snaps so you can throw out garbage time snaps.  Still do the official totals directly from the league table in step (3).
+	
+	OUTPUT TABLE
+	#temp_teams_no_garbage_game_snaps
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_teams_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_plays') IS NOT NULL
+		DROP TABLE #temp_teams_plays
+
+	SELECT DISTINCT pp.GameKey AS nfl_game_key
+		,nfl_club_id
+		,pp.PlayID AS nfl_play_id
+		,ClubCode
+		,PossessionTeam
+		,garbage_time
+	INTO #temp_teams_plays
+	FROM [ClubDB].[dbo].[PlayerParticipation] pp
+	INNER JOIN [ProDB].[dbo].[PlayList] pl
+		ON pp.GameKey = pl.GameKey
+		AND pp.PlayID = pl.PlayID
+	LEFT JOIN [PFFUltimate].dbo.plays pf
+		ON pp.GameKey = pf.gsis_game_id
+		AND pp.PlayId = pf.gsis_play_id
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON (CASE WHEN pp.ClubCode = 'SL' THEN 'LA' 
+				WHEN pp.ClubCode = 'SD' THEN 'LAC'
+				WHEN pp.ClubCode = 'OAK' THEN 'LV'
+				ELSE pp.ClubCode 
+			END) = cl.code
+	WHERE SpecialTeamsPlay = 0
+		AND UPPER(PlayDescription) NOT LIKE '%NULLIFIED%'
+		AND UPPER(PlayDescription) NOT LIKE '%NO PLAY%'
+		AND UPPER(PlayDescription) NOT LIKE '%DELAY OF GAME%'
+
+
+	-- Check if #temp_teams_no_garbage_game_snaps exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_no_garbage_game_snaps') IS NOT NULL
+		DROP TABLE #temp_teams_no_garbage_game_snaps
+
+	SELECT nfl_game_key
+		,nfl_club_id
+		,SUM(CASE WHEN ClubCode = PossessionTeam THEN 1 ELSE 0 END) AS snap_count_offense_pff
+		,SUM(CASE WHEN ClubCode <> PossessionTeam THEN 1 ELSE 0 END) AS snap_count_defense_pff
+		,SUM(CASE WHEN garbage_time = 0 AND ClubCode = PossessionTeam THEN 1 ELSE 0 END) AS snap_count_offense_no_garbage
+		,SUM(CASE WHEN garbage_time = 0 AND ClubCode <> PossessionTeam THEN 1 ELSE 0 END) AS snap_count_defense_no_garbage
+	INTO #temp_teams_no_garbage_game_snaps
+	FROM #temp_teams_plays
+	GROUP BY nfl_game_key
+		,nfl_club_id
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)(c)
+
+	Sum up the offense defense snaps a player missed cause he was injured so you can take them out of the injury sums later.
+
+	OUTPUT TABLE
+	#temp_teams_plays_no_inj
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_teams_plays_no_inj exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_teams_plays_no_inj') IS NOT NULL
+		DROP TABLE #temp_teams_plays_no_inj
+
+	SELECT nfl_game_key
+		,ii.nfl_player_id
+		,nfl_club_id
+		,po.[team] AS side_of_ball
+		,SUM(CASE WHEN po.[team] = 'defense' AND ClubCode <> PossessionTeam THEN ii.currently_injured 
+			WHEN po.[team] = 'offense' AND ClubCode = PossessionTeam THEN ii.currently_injured
+			ELSE 0
+		END) AS currently_injured_plays
+	INTO #temp_teams_plays_no_inj
+	FROM stage_plays_player_injuries ii
+	INNER JOIN #temp_teams_plays st
+		ON ii.gsis_game_key = st.nfl_game_key
+		AND ii.gsis_play_id = st.nfl_play_id
+		AND ii.club_code = st.ClubCode
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON ii.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE st.garbage_time = 0
+	GROUP BY nfl_game_key
+		,ii.nfl_player_id
+		,nfl_club_id
+		,po.[team]
+
+	DROP TABLE #temp_teams_plays
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	Join the team snaps to the player snaps and join in the O/D snap counts
+	
+	OUTPUT TABLE
+	#temp_players_game_snaps
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_players_game_snaps exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_players_game_snaps') IS NOT NULL
+		DROP TABLE #temp_players_game_snaps
+
+	SELECT PlayerID AS nfl_player_id
+		,pt.GameKey AS nfl_game_key
+		,pt.season
+		,ga.season_type
+		,[week] 
+		,pt.ClubID AS nfl_club_id
+		,OffensivePlays AS snap_count_offense
+		,TeamOffensivePlays AS snap_count_offense_team
+		,DefensivePlays AS snap_count_defense
+		,TeamDefensivePlays AS snap_count_defense_team
+		,SpecialTeamPlays AS snap_count_special_teams
+		,TeamSpecialTeamPlays AS snap_count_special_teams_team
+		,COALESCE(ps.snap_count_4_phase,0) AS snap_count_4_phase
+		,ts.snap_count_4_phase AS snap_count_4_phase_team
+		,COALESCE(ps.snap_count_special_teams_weighted,0) AS snap_count_special_teams_weighted
+		,ts.snap_count_special_teams_weighted AS snap_count_special_teams_weighted_team
+		,COALESCE(ps.snap_count_special_teams_no_garbage,0) AS snap_count_special_teams_no_garbage
+		,ts.snap_count_special_teams_no_garbage AS snap_count_special_teams_no_garbage_team
+		,COALESCE(ps.snap_count_4_phase_no_garbage,0) AS snap_count_4_phase_no_garbage
+		,ts.snap_count_4_phase_no_garbage AS snap_count_4_phase_no_garbage_team
+		,COALESCE(ps.snap_count_special_teams_weighted_no_garbage,0) AS snap_count_special_teams_weighted_no_garbage
+		,ts.snap_count_special_teams_weighted_no_garbage AS snap_count_special_teams_weighted_no_garbage_team
+		,ng.snap_count_offense_pff
+		,ng.snap_count_defense_pff
+		,ng.snap_count_offense_no_garbage
+		,ng.snap_count_defense_no_garbage
+		,tn.snap_count_offense_pff AS snap_count_offense_pff_team
+		,tn.snap_count_defense_pff AS snap_count_defense_pff_team
+		,tn.snap_count_offense_no_garbage AS snap_count_offense_no_garbage_team
+		,tn.snap_count_defense_no_garbage AS snap_count_defense_no_garbage_team
+		,ts.snap_count_4_phase_no_garbage - ISNULL(ni.currently_injured_plays,0) AS snap_count_4_phase_no_garbage_inj_team
+		,tn.snap_count_offense_no_garbage - CASE WHEN ti.side_of_ball = 'offense' THEN ISNULL(ti.currently_injured_plays,0) ELSE 0 END AS snap_count_offense_no_garbage_inj_team
+		,tn.snap_count_defense_no_garbage - CASE WHEN ti.side_of_ball = 'defense' THEN ISNULL(ti.currently_injured_plays,0) ELSE 0 END AS snap_count_defense_no_garbage_inj_team
+	INTO #temp_players_game_snaps
+	FROM ClubDb.dbo.PlayTime pt
+	LEFT JOIN #temp_players_game_snaps_st ps
+		ON pt.PlayerID = ps.nfl_player_id
+		AND pt.GameKey = ps.nfl_game_key
+	LEFT JOIN #temp_teams_game_snaps_st ts
+		ON pt.GameKey = ts.nfl_game_key
+		AND pt.ClubID = ts.nfl_club_id
+	LEFT JOIN #temp_players_no_garbage_game_snaps ng
+		ON pt.PlayerID = ng.nfl_player_id
+		AND pt.GameKey = ng.nfl_game_key
+	LEFT JOIN #temp_teams_no_garbage_game_snaps tn
+		ON pt.GameKey = tn.nfl_game_key
+		AND pt.ClubID = tn.nfl_club_id
+	LEFT JOIN #temp_teams_game_snaps_st_no_inj ni
+		ON pt.GameKey = ni.nfl_game_key
+		AND pt.PlayerID = ni.nfl_player_id
+	LEFT JOIN #temp_teams_plays_no_inj ti
+		ON pt.GameKey = ti.nfl_game_key
+		AND pt.PlayerID = ti.nfl_player_id
+	INNER JOIN BaneProductionAnalytics.dbo.pro_games ga
+		ON pt.GameKey = ga.nfl_game_key
+
+
+DROP TABLE #temp_players_game_snaps_st
+DROP TABLE #temp_teams_game_snaps_st
+DROP TABLE #temp_players_no_garbage_game_snaps
+DROP TABLE #temp_teams_no_garbage_game_snaps
+DROP TABLE #temp_teams_game_snaps_st_no_inj
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(4)
+
+
+	Find team win totals as of week 16.  This is part of the "nothing to play for" determination.
+
+	OUTPUT TABLES:
+	#temp_team_wins
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_results exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_results') IS NOT NULL
+		DROP TABLE #temp_results
+
+	SELECT home_team_nfl_club_key
+		,away_team_nfl_club_key
+		,nfl_game_key
+		,season
+		,[week]
+		,CASE WHEN home_team_score > away_team_score THEN 1
+			WHEN home_team_score = away_team_score THEN 0.5
+			ELSE 0
+		END AS home_win
+		,CASE WHEN away_team_score > home_team_score THEN 1
+			WHEN away_team_score = home_team_score THEN 0.5
+			ELSE 0
+		END AS away_win
+	INTO #temp_results
+	FROM [BaneProductionAnalytics].[dbo].[pro_games]
+	WHERE home_team_score IS NOT NULL
+		AND away_team_score IS NOT NULL
+		AND season > 2003
+		AND UPPER(season_type) = 'REG'
+		AND [week] < 17
+
+
+-- Check if #temp_team_results exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_team_results') IS NOT NULL
+	DROP TABLE #temp_team_results
+
+	SELECT nfl_game_key
+		,season
+		,home_team_nfl_club_key AS target_team_key
+		,home_win AS target_result
+	INTO #temp_team_results
+	FROM #temp_results
+
+	INSERT INTO #temp_team_results
+	SELECT nfl_game_key
+		,season
+		,away_team_nfl_club_key AS target_team_key
+		,away_win AS target_result
+	FROM #temp_results
+
+
+-- Check if #temp_team_wins exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_team_wins') IS NOT NULL
+	DROP TABLE #temp_team_wins
+
+	SELECT cl.ClubID AS nfl_club_id
+		,re.season
+		,SUM(target_result) AS wins
+	INTO #temp_team_wins
+	FROM #temp_team_results re
+	LEFT JOIN ClubDB.dbo.Club cl
+		ON re.target_team_key = cl.ClubKey
+	GROUP BY cl.ClubID
+		,re.season
+
+DROP TABLE #temp_results
+DROP TABLE #temp_team_results
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(5)
+
+
+	Find out games where a player got injured during the game.
+
+	OUTPUT TABLES:
+	#temp_injured_in_game_distinct
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_injured_in_game exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_injured_in_game') IS NOT NULL
+		DROP TABLE #temp_injured_in_game
+
+	SELECT DISTINCT gsis_game_id AS gsis_game_key
+		,gsis_player_id AS nfl_player_id
+	INTO #temp_injured_in_game
+	FROM [PFFUltimate].dbo.offense
+	WHERE injured_on_play = 'TRUE'
+	
+	INSERT INTO #temp_injured_in_game
+	SELECT DISTINCT gsis_game_id AS gsis_game_key
+		,gsis_player_id AS nfl_player_id
+	FROM [PFFUltimate].dbo.defense
+	WHERE injured_on_play = 'TRUE'
+
+	INSERT INTO #temp_injured_in_game
+	SELECT DISTINCT gsis_game_id AS gsis_game_key
+		,gsis_player_id AS nfl_player_id
+	FROM [PffUltimate].dbo.special
+	WHERE injured_on_play = 'TRUE'
+
+
+-- Check if #temp_injured_in_game_distinct exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injured_in_game_distinct') IS NOT NULL
+	DROP TABLE #temp_injured_in_game_distinct
+
+	SELECT DISTINCT gsis_game_key
+		,nfl_player_id
+	INTO #temp_injured_in_game_distinct
+	FROM #temp_injured_in_game	
+
+DROP TABLE #temp_injured_in_game
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(6)
+
+
+	Find out games where a player rested due to "nothing to play for."
+
+	OUTPUT TABLES:
+	#temp_nothing_to_play_for
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_nothing_to_play_for exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nothing_to_play_for') IS NOT NULL
+		DROP TABLE #temp_nothing_to_play_for
+
+	SELECT st.nfl_player_id
+		,st.nfl_game_key
+		,sn.season
+		,cl.code
+	INTO #temp_nothing_to_play_for
+	FROM analysis_players_gameweek_status st
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON st.club_id = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	INNER JOIN #temp_players_game_snaps sn
+		ON st.season = sn.season
+		AND st.nfl_player_id = sn.nfl_player_id
+	INNER JOIN #temp_team_wins wi
+		ON st.club_id = wi.nfl_club_id
+		AND st.season = wi.season
+	LEFT JOIN #temp_injured_in_game_distinct ij
+		ON st.nfl_game_key = ij.gsis_game_key
+		AND st.nfl_player_id = ij.nfl_player_id
+	LEFT JOIN analysis_players_gameweek_status spl
+		ON st.season = spl.season
+		AND st.nfl_player_id = spl.nfl_player_id
+		AND spl.season_type = 'POST'
+		AND spl.[week] = 1
+	LEFT JOIN analysis_players_gameweek_status sp2
+		ON st.season = sp2.season
+		AND st.nfl_player_id = sp2.nfl_player_id
+		AND sp2.season_type = 'POST'
+		AND sp2.[week] = 2
+	LEFT JOIN map_playoff_seedings sd
+		ON st.season = sd.season
+		AND st.club_id = sd.nfl_club_id
+	WHERE st.season_type = 'REG'
+		AND ((st.season < 2021 AND st.[week] = 17) OR (st.season >= 2021 AND st.[week] = 18))
+		AND st.status_roster_simple IN ('ACTIVE','INACTIVE')
+		--AND st.injury_status_week IS NULL
+		AND NOT (CASE WHEN spl.nfl_game_key IS NULL THEN ISNULL(sp2.status_roster_simple,'NOGAME') ELSE spl.status_roster_simple END = 'INJURED' OR CASE WHEN spl.nfl_game_key IS NULL THEN sp2.injury_status_week ELSE spl.injury_status_week END IS NOT NULL)
+		AND ij.nfl_player_id IS NULL
+		AND (wi.wins >= 11 OR (wi.wins > 8 AND sd.clinched_playoffs = 1) OR sd.locked_into_seed = 1)
+	GROUP BY st.nfl_player_id
+		,st.nfl_game_key
+		,sn.season
+		,cl.code
+	HAVING (CAST(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] IN (15,16)) OR (sn.season >= 2021 AND sn.[week] IN (16,17))) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense ELSE snap_count_defense END ELSE 0 END) AS FLOAT)
+			/ NULLIF(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] IN (15,16)) OR (sn.season >= 2021 AND sn.[week] IN (16,17))) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense_team ELSE snap_count_defense_team END ELSE 0 END),0)) >= 0.5
+		AND (CAST(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] = 17) OR (sn.season >= 2021 AND sn.[week] = 18)) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense ELSE snap_count_defense END ELSE 0 END) AS FLOAT)
+			/ NULLIF(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] = 17) OR (sn.season >= 2021 AND sn.[week] = 18)) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense_team ELSE snap_count_defense_team END ELSE 0 END),0))/
+		NULLIF((CAST(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] < 17) OR (sn.season >= 2021 AND sn.[week] < 18)) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense ELSE snap_count_defense END ELSE 0 END) AS FLOAT)
+			/ NULLIF(SUM(CASE WHEN ((sn.season < 2021 AND sn.[week] < 17) OR (sn.season >= 2021 AND sn.[week] < 18)) THEN CASE WHEN snap_count_offense >= snap_count_defense THEN snap_count_offense_team ELSE snap_count_defense_team END ELSE 0 END),0)),0) < 0.60
+
+
+DROP TABLE #temp_team_wins
+DROP TABLE #temp_injured_in_game_distinct
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(7)
+
+
+	Find a player game position. 
+
+	TEMP TABLE
+		#temp_player_game_depth
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_depth_to_club, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_depth_to_club') IS NOT NULL
+		DROP TABLE #temp_depth_to_club
+
+	SELECT depth.*
+		,club.ClubID
+		,Club_Name
+		,CASE WHEN Squad_ID = 1 THEN 'OFF'
+			WHEN Squad_ID = 2 THEN 'DEF'
+			WHEN Squad_ID = 3 THEN 'ST'
+			WHEN Squad_ID = 101 THEN 'OFFSTART'
+			WHEN Squad_ID = 102 THEN 'DEFSTART'
+			ELSE 'OTHER'
+		END AS SquadCode
+		,CASE WHEN Squad_ID = 1 THEN 2
+			WHEN Squad_ID = 2 THEN 2
+			WHEN Squad_ID = 3 THEN 3
+			WHEN Squad_ID = 101 THEN 1
+			WHEN Squad_ID = 102 THEN 1
+			ELSE 4
+		END AS SquadImportance
+	INTO #temp_depth_to_club
+	FROM [ProDB].[dbo].[GameDepth] depth
+	INNER JOIN [ProDB].[dbo].[Club] club 
+			ON depth.ClubKey=club.ClubKey
+
+		
+	-- Check if #temp_depth_to_roster exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_depth_to_roster') IS NOT NULL
+		DROP TABLE #temp_depth_to_roster
+
+	SELECT ro.GameKey
+		,ro.PlayerID
+		,CASE WHEN dc.Position = '' OR dc.Position IS NULL THEN  ro.positionabbr ELSE dc.Position END AS position
+		,Depth_ID AS depth_number
+		--for this code you sort by squad code so that defense comes first, when you do offense coded make it desc so offense comes first
+		,RANK() OVER (PARTITION BY ro.GameKey, ro.ClubID, ro.PlayerID ORDER BY SquadImportance, [Priority], Depth_ID, SquadCode, CASE WHEN dc.Position = '' THEN  ro.positionabbr ELSE dc.Position END, Game$Depth_ID) AS depth_chart_order
+	INTO #temp_depth_to_roster
+	FROM [ClubDB].[dbo].[GameRoster] ro
+	LEFT JOIN #temp_depth_to_club dc
+		ON dc.ClubID=ro.ClubID
+		AND dc.Uniform_Number=ro.jerseynumber
+		AND dc.GameKey=ro.Gamekey
+	WHERE SquadImportance IN (1,2)
+	ORDER BY dc.GameKey
+			,ClubKey
+			,ro.PlayerID
+			,SquadImportance
+			,[Priority]
+			,Depth_ID
+			,SquadCode
+			,CASE WHEN Position = '' THEN  ro.positionabbr ELSE POSITION END
+			,Game$Depth_ID
+
+ 
+	-- Check if #temp_player_game_depth, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_game_depth') IS NOT NULL
+		DROP TABLE #temp_player_game_depth
+
+	SELECT GameKey AS nfl_game_key
+		,PlayerID AS nfl_player_id
+		,position_cleaned AS position
+		,position_group
+		,position_unit
+		,depth_number
+		,CONCAT(position_group,'_',depth_number) AS position_group_depth
+	INTO #temp_player_game_depth
+	FROM #temp_depth_to_roster dr
+	INNER JOIN map_nfl_positions po
+		ON LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(dr.Position, CHAR(10), ''), CHAR(13), ''), CHAR(9), ''))) = po.position
+	WHERE depth_chart_order = 1
+
+
+DROP TABLE #temp_depth_to_club
+DROP TABLE #temp_depth_to_roster
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Join the player game snaps to the player game position and take out the nothing to play for games
+
+
+	STAGING TABLES:
+		stage_players_game_playtime
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE stage_players_game_playtime
+
+	INSERT INTO stage_players_game_playtime
+		([nfl_player_id]
+		,[nfl_game_key]
+		,[nfl_club_id]
+		,[season]
+		,[season_type]
+		,[depth_position]
+		,[depth_position_group]
+		,[depth_position_unit]
+		,[depth_number]
+		,[snap_count_offense]
+		,[snap_count_offense_team]
+		,[snap_count_defense]
+		,[snap_count_defense_team]
+		,[snap_count_special_teams]
+		,[snap_count_special_teams_team]
+		,[snap_count_4_phase]
+		,[snap_count_4_phase_team]
+		,[snap_count_special_teams_weighted]
+		,[snap_count_special_teams_weighted_team]
+		,[snap_count_all]
+		,[snap_count_od]
+		,[snap_count_weighted]
+		,[equivalent_games_no_weight]
+		,[equivalent_games]
+		,[equivalent_games_off_def]
+		,[snap_count_offense_no_garbage]
+		,[snap_count_offense_no_garbage_team]
+		,[snap_count_defense_no_garbage]
+		,[snap_count_defense_no_garbage_team]
+		,[snap_count_4_phase_no_garbage]
+		,[snap_count_4_phase_no_garbage_team]
+		,[snap_count_offense_no_garbage_inj_team]
+		,[snap_count_defense_no_garbage_inj_team]
+		,[snap_count_4_phase_no_garbage_inj_team]
+		)
+	SELECT sc.nfl_player_id
+		,sc.nfl_game_key
+		,sc.nfl_club_id
+		,sc.season
+		,season_type
+		,position AS depth_position
+		,position_group AS depth_position_group
+		,position_unit AS depth_position_unit
+		,depth_number 
+		,snap_count_offense
+		,snap_count_offense_team
+		,snap_count_defense
+		,snap_count_defense_team
+		,snap_count_special_teams
+		,snap_count_special_teams_team
+		,snap_count_4_phase	      
+		,snap_count_4_phase_team
+		,snap_count_special_teams_weighted
+		,snap_count_special_teams_weighted_team
+		,(snap_count_defense + snap_count_offense + snap_count_special_teams) AS snap_count_all
+		,(snap_count_defense + snap_count_offense) AS snap_count_od
+		,(snap_count_defense + snap_count_offense + snap_count_special_teams_weighted) AS snap_count_weighted
+		,CAST((snap_count_defense + snap_count_offense + snap_count_special_teams) AS FLOAT)
+		/ NULLIF(CAST((CASE WHEN position_unit = 'DEF' THEN snap_count_defense_team + snap_count_special_teams_team
+				WHEN position_unit = 'OFF' THEN snap_count_offense_team + snap_count_special_teams_team
+				WHEN position_unit = 'ST' AND snap_count_special_teams_weighted > (snap_count_defense + snap_count_offense) THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_special_teams > 0 AND (snap_count_defense + snap_count_offense) = 0 THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_defense >= snap_count_offense THEN snap_count_defense_team + snap_count_special_teams_team
+				WHEN snap_count_offense > snap_count_defense THEN snap_count_offense_team + snap_count_special_teams_team
+				ELSE NULL
+				END) AS FLOAT),0)
+		AS equivalent_games_no_weight
+		,CAST((snap_count_defense + snap_count_offense + snap_count_special_teams_weighted) AS FLOAT)
+		/ NULLIF(CAST((CASE WHEN position_unit = 'DEF' THEN snap_count_defense_team
+				WHEN position_unit = 'OFF' THEN snap_count_offense_team
+				WHEN position_unit = 'ST' AND snap_count_special_teams_weighted > (snap_count_defense + snap_count_offense) THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_special_teams_weighted > 0 AND (snap_count_defense + snap_count_offense) = 0 THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_defense >= snap_count_offense THEN snap_count_defense_team
+				WHEN snap_count_offense > snap_count_defense THEN snap_count_offense_team
+				ELSE NULL
+				END) AS FLOAT),0)
+		AS equivalent_games
+		,CAST((snap_count_defense + snap_count_offense) AS FLOAT)
+		/ NULLIF(CAST((CASE WHEN position_unit = 'DEF' THEN snap_count_defense_team
+				WHEN position_unit = 'OFF' THEN snap_count_offense_team
+				WHEN position_unit = 'ST' AND snap_count_special_teams_weighted > (snap_count_defense + snap_count_offense) THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_special_teams_weighted > 0 AND (snap_count_defense + snap_count_offense) = 0 THEN ((snap_count_defense_team + snap_count_offense_team) / 2)
+				WHEN snap_count_defense >= snap_count_offense THEN snap_count_defense_team
+				WHEN snap_count_offense > snap_count_defense THEN snap_count_offense_team
+				ELSE NULL
+				END) AS FLOAT),0)
+		AS equivalent_games_off_def
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL 
+			WHEN sc.snap_count_offense_no_garbage IS NULL AND sc.snap_count_offense_no_garbage_team IS NOT NULL THEN 0
+			ELSE sc.snap_count_offense_no_garbage
+		END AS snap_count_offense_no_garbage
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE sc.snap_count_offense_no_garbage_team END AS snap_count_offense_no_garbage_team
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL 
+			WHEN sc.snap_count_defense_no_garbage IS NULL AND sc.snap_count_defense_no_garbage_team IS NOT NULL THEN 0
+			ELSE sc.snap_count_defense_no_garbage
+		END AS snap_count_defense_no_garbage
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE sc.snap_count_defense_no_garbage_team END AS snap_count_defense_no_garbage_team
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL 
+			WHEN sc.snap_count_4_phase_no_garbage IS NULL AND sc.snap_count_4_phase_no_garbage_team IS NOT NULL THEN 0
+			ELSE sc.snap_count_4_phase_no_garbage
+		END AS snap_count_4_phase_no_garbage
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE sc.snap_count_4_phase_no_garbage_team END AS snap_count_4_phase_no_garbage_team
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE ISNULL(snap_count_offense_no_garbage_inj_team,0) END AS snap_count_offense_no_garbage_inj_team
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE ISNULL(snap_count_defense_no_garbage_inj_team,0) END AS snap_count_defense_no_garbage_inj_team
+		,CASE WHEN nf.nfl_game_key IS NOT NULL THEN NULL ELSE ISNULL(snap_count_4_phase_no_garbage_inj_team,0) END AS snap_count_4_phase_no_garbage_inj_team
+	FROM #temp_players_game_snaps sc
+	LEFT JOIN #temp_player_game_depth gp
+		ON sc.nfl_player_id = gp.nfl_player_id
+		AND sc.nfl_game_key = gp.nfl_game_key
+	LEFT JOIN #temp_nothing_to_play_for nf
+		ON sc.nfl_player_id = nf.nfl_player_id
+		AND sc.nfl_game_key = nf.nfl_game_key
+
+
+	RETURN @oReturnCD
+		
+END
+
+
+
+
+GO
+
+
