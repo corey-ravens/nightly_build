@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_cff_game_grades]    Script Date: 5/11/2022 12:46:19 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_player_cff_pff_game_grades]    Script Date: 5/11/2022 12:36:41 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -14,11 +14,18 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_analysis_players_cff_game_grades] (@oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_bane_player_cff_pff_game_grades] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_analysis_players_cff_game_grades
+Procedure Name:	sp_bane_cff_pff_game_grades
 Author:			Jeremy Parks
 Creation Date:	12/22/2016
 Description:       
@@ -29,6 +36,21 @@ Description:
 	into a z-score based on his position.
 
 	It also does the same for pro games based on PFF.
+
+	
+	COLLEGE:
+	(1) Side of ball
+	(2) All play grades
+	(3) Convert to game grade
+	(4) Position averages
+	(5) Write to permanent table
+
+	PRO:
+	(6) Side of ball
+	(7) All play grades
+	(8) Convert to game grade
+	(9) Position averages
+	(10) Write to permanent table
 	
 			
 Input Parameters:
@@ -65,7 +87,7 @@ BEGIN
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 	DECLARE @cff_season INT
-	SET @cff_season = (SELECT MAX(season) FROM CFFUltimate.dbo.plays)
+	SET @cff_season = (SELECT MAX(season) FROM daily_build_cff_plays)
 
 
 	-- Check if #temp_player_side_of_ball exists, if it does drop it
@@ -142,14 +164,13 @@ BEGIN
 		  ,sob.position_side_of_ball AS position_side_of_ball_bane
 		  ,CAST(d.grade AS NUMERIC(5,2)) AS cff_grade
 	INTO #temp_cff_play_grades
-	FROM [CFFUltimate].dbo.defense d
-	INNER JOIN [CFFUltimate].dbo.plays pl
+	FROM daily_build_cff_defense d
+	INNER JOIN daily_build_cff_plays pl
 		ON d.play_id = pl.play_id
 	INNER JOIN #temp_player_side_of_ball sob
 		ON d.gsis_player_id = sob.ncaa_gsis_id
 		AND sob.id_order = 1
 	WHERE pl.season = @cff_season
-
 
 	INSERT INTO #temp_cff_play_grades
     SELECT gsis_player_id AS ncaa_gsis_id
@@ -193,8 +214,8 @@ BEGIN
 		   END AS position_side_of_ball_cff
 		  ,sob.position_side_of_ball AS position_side_of_ball_bane
 		  ,CAST(o.grade AS NUMERIC(5,2)) AS cff_grade
-	FROM [CFFUltimate].dbo.offense o
-	INNER JOIN [CFFUltimate].dbo.plays pl
+	FROM daily_build_cff_offense o
+	INNER JOIN daily_build_cff_plays pl
 		ON o.play_id = pl.play_id
 	INNER JOIN #temp_player_side_of_ball sob
 		ON o.gsis_player_id = sob.ncaa_gsis_id
@@ -273,14 +294,14 @@ BEGIN
 	Join the player game grade to the position average game grade to create a game z-score grade.
 
 	OUTPUT TABLES:
-		analysis_players_cff_game_grades
+		bane_player_cff_game_grades
 		
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM analysis_players_cff_game_grades
+	DELETE FROM bane_player_cff_game_grades
 	WHERE season = @cff_season
 
-	INSERT INTO analysis_players_cff_game_grades
+	INSERT INTO bane_player_cff_game_grades
 	SELECT gg.ncaa_gsis_id
 		  ,gsis_game_key
 		  ,gg.season
@@ -292,6 +313,7 @@ BEGIN
 				WHEN (cff_grade_avg - cff_grade_avg_pos) / NULLIF(cff_grade_stdev_pos,0) >= 0.125 THEN 'GOOD'
 				ELSE 'AVERAGE'
 		   END AS cff_grade_bucket
+		   ,GETDATE() AS updated_at
 	FROM #temp_cff_game_grades gg
 	INNER JOIN #temp_cff_game_grades_position pos
 		ON gg.position = pos.position
@@ -318,7 +340,7 @@ BEGIN
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 	DECLARE @pff_season INT
-	SET @pff_season = (SELECT MAX(season) FROM PFFUltimate.dbo.plays)
+	SET @pff_season = (SELECT MAX(season) FROM daily_build_pff_plays)
 
 
 	-- Check if #temp_player_side_of_ball_pro exists, if it does drop it
@@ -348,7 +370,6 @@ BEGIN
 		#temp_pff_play_grades
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
 
 	-- Check if #temp_pff_play_grades exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_pff_play_grades') IS NOT NULL
@@ -396,14 +417,13 @@ BEGIN
 		  ,sob.position_side_of_ball AS position_side_of_ball_bane
 		  ,CAST(d.grade AS NUMERIC(5,2)) AS pff_grade
 	INTO #temp_pff_play_grades
-	FROM [PFFUltimate].dbo.defense d
-	INNER JOIN [PFFUltimate].dbo.plays pl
+	FROM daily_build_pff_defense d
+	INNER JOIN daily_build_pff_plays pl
 		ON d.play_id = pl.play_id
 	INNER JOIN #temp_player_side_of_ball_pro sob
 		ON d.gsis_player_id = sob.nfl_player_id
 		AND sob.id_order = 1
 	WHERE pl.season = @pff_season
-
 
 	INSERT INTO #temp_pff_play_grades
     SELECT gsis_player_id AS nfl_player_id
@@ -447,8 +467,8 @@ BEGIN
 		   END AS position_side_of_ball_pff
 		  ,sob.position_side_of_ball AS position_side_of_ball_bane
 		  ,CAST(o.grade AS NUMERIC(5,2)) AS pff_grade
-	FROM [PFFUltimate].dbo.offense o
-	INNER JOIN [PFFUltimate].dbo.plays pl
+	FROM daily_build_pff_offense o
+	INNER JOIN daily_build_pff_plays pl
 		ON o.play_id = pl.play_id
 	INNER JOIN #temp_player_side_of_ball_pro sob
 		ON o.gsis_player_id = sob.nfl_player_id
@@ -527,14 +547,14 @@ BEGIN
 	Join the player game grade to the position average game grade to create a game z-score grade.
 
 	OUTPUT TABLES:
-		analysis_players_pff_game_grades
+		bane_player_pff_game_grades
 		
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM analysis_players_pff_game_grades
+	DELETE FROM bane_player_pff_game_grades
 	WHERE season = @pff_season
 
-	INSERT INTO analysis_players_pff_game_grades
+	INSERT INTO bane_player_pff_game_grades
 	SELECT gg.nfl_player_id
 		  ,gsis_game_key
 		  ,gg.season
@@ -546,6 +566,7 @@ BEGIN
 				WHEN (pff_grade_avg - pff_grade_avg_pos) / NULLIF(pff_grade_stdev_pos,0) >= 0.125 THEN 'GOOD'
 				ELSE 'AVERAGE'
 		   END AS pff_grade_bucket
+		   ,GETDATE() AS updated_at
 	FROM #temp_pff_game_grades gg
 	INNER JOIN #temp_pff_game_grades_position pos
 		ON gg.position = pos.position
