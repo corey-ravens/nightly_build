@@ -1,0 +1,577 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_cff_game_grades]    Script Date: 5/11/2022 12:46:19 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_analysis_players_cff_game_grades] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_analysis_players_cff_game_grades
+Author:			Jeremy Parks
+Creation Date:	12/22/2016
+Description:       
+
+
+	This program is for creating the "Good, Bad, Average" college game colors based on CFF. For each college game a 
+	player plays, use CFF grade to see if they determined it to be good, bad, or average.  Turn the grade
+	into a z-score based on his position.
+
+	It also does the same for pro games based on PFF.
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	@oReturnCD
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+BEGIN 
+  
+
+
+	SET @oReturnCD  = 0
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+
+	Create a table noting a player's side of the ball in the database. Add an order variable
+	so when you join to this table you can join where order = 1 to eliminate duplicate players.
+	There are a lot of duplicate NCAA Ids from the league.
+
+	temp TABLES:
+		#temp_player_side_of_ball
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	DECLARE @cff_season INT
+	SET @cff_season = (SELECT MAX(season) FROM CFFUltimate.dbo.plays)
+
+
+	-- Check if #temp_player_side_of_ball exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_side_of_ball') IS NOT NULL
+		DROP TABLE #temp_player_side_of_ball
+
+	SELECT ncaa_gsis_id
+		  ,RANK() OVER (PARTITION BY ncaa_gsis_id ORDER BY pl.id, po.id) AS id_order
+	      ,translation AS position
+		  ,UPPER(team) AS position_side_of_ball
+	INTO #temp_player_side_of_ball
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE ncaa_gsis_id IS NOT NULL
+		AND is_deleted = 0
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Create a table of all the CFF Defensive grades.  Then append onto that all the CFF Offensive grades.
+
+	temp TABLES:
+		#temp_cff_play_grades
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cff_play_grades exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_play_grades') IS NOT NULL
+		DROP TABLE #temp_cff_play_grades
+
+	SELECT gsis_player_id AS ncaa_gsis_id
+		  ,d.gsis_game_id AS gsis_game_key
+		  ,season
+		  ,team AS school_code
+		  ,CASE WHEN d.position IN ('NT','NLT','NRT') THEN 'NT'
+				WHEN d.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DT'
+				WHEN d.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DE'
+				WHEN d.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'IB'
+				WHEN d.position IN ('LOLB','ROLB') THEN 'OB'
+				WHEN d.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'CB'
+				WHEN d.position IN ('FS','FSL','FSR') THEN 'FS'
+				WHEN d.position IN ('SS','SSL','SSR') THEN 'SS'
+				WHEN d.position IN ('QB') THEN 'QB'
+				WHEN d.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'RB'
+				WHEN d.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'FB'
+				WHEN d.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'WR'
+				WHEN d.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'TE'				
+				WHEN d.position IN ('RT','LT') THEN 'OT'				
+				WHEN d.position IN ('LG','RG') THEN 'OG'
+				WHEN d.position IN ('C') THEN 'OC'
+		   END AS position_cff
+		  ,sob.position
+		  ,CASE WHEN d.position IN ('NT','NLT','NRT') THEN 'DEFENSE'
+				WHEN d.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DEFENSE'
+				WHEN d.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DEFENSE'
+				WHEN d.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'DEFENSE'
+				WHEN d.position IN ('LOLB','ROLB') THEN 'DEFENSE'
+				WHEN d.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'DEFENSE'
+				WHEN d.position IN ('FS','FSL','FSR') THEN 'DEFENSE'
+				WHEN d.position IN ('SS','SSL','SSR') THEN 'DEFENSE'
+				WHEN d.position IN ('QB') THEN 'OFFENSE'
+				WHEN d.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'OFFENSE'
+				WHEN d.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'OFFENSE'
+				WHEN d.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'OFFENSE'
+				WHEN d.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'OFFENSE'				
+				WHEN d.position IN ('RT','LT') THEN 'OFFENSE'				
+				WHEN d.position IN ('LG','RG') THEN 'OFFENSE'
+				WHEN d.position IN ('C') THEN 'OFFENSE'
+		   END AS position_side_of_ball_cff
+		  ,sob.position_side_of_ball AS position_side_of_ball_bane
+		  ,CAST(d.grade AS NUMERIC(5,2)) AS cff_grade
+	INTO #temp_cff_play_grades
+	FROM [CFFUltimate].dbo.defense d
+	INNER JOIN [CFFUltimate].dbo.plays pl
+		ON d.play_id = pl.play_id
+	INNER JOIN #temp_player_side_of_ball sob
+		ON d.gsis_player_id = sob.ncaa_gsis_id
+		AND sob.id_order = 1
+	WHERE pl.season = @cff_season
+
+
+	INSERT INTO #temp_cff_play_grades
+    SELECT gsis_player_id AS ncaa_gsis_id
+		  ,o.gsis_game_id AS gsis_game_key
+		  ,season
+		  ,team AS school_code
+		  ,CASE WHEN o.position IN ('NT','NLT','NRT') THEN 'NT'
+				WHEN o.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DT'
+				WHEN o.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DE'
+				WHEN o.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'IB'
+				WHEN o.position IN ('LOLB','ROLB') THEN 'OB'
+				WHEN o.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'CB'
+				WHEN o.position IN ('FS','FSL','FSR') THEN 'FS'
+				WHEN o.position IN ('SS','SSL','SSR') THEN 'SS'
+				WHEN o.position IN ('QB') THEN 'QB'
+				WHEN o.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'RB'
+				WHEN o.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'FB'
+				WHEN o.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'WR'
+				WHEN o.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'TE'				
+				WHEN o.position IN ('RT','LT') THEN 'OT'				
+				WHEN o.position IN ('LG','RG') THEN 'OG'
+				WHEN o.position IN ('C') THEN 'OC'
+		   END AS position_cff
+		  ,sob.position
+		  ,CASE WHEN o.position IN ('NT','NLT','NRT') THEN 'DEFENSE'
+				WHEN o.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DEFENSE'
+				WHEN o.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DEFENSE'
+				WHEN o.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'DEFENSE'
+				WHEN o.position IN ('LOLB','ROLB') THEN 'DEFENSE'
+				WHEN o.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'DEFENSE'
+				WHEN o.position IN ('FS','FSL','FSR') THEN 'DEFENSE'
+				WHEN o.position IN ('SS','SSL','SSR') THEN 'DEFENSE'
+				WHEN o.position IN ('QB') THEN 'OFFENSE'
+				WHEN o.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'OFFENSE'
+				WHEN o.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'OFFENSE'
+				WHEN o.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'OFFENSE'
+				WHEN o.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'OFFENSE'				
+				WHEN o.position IN ('RT','LT') THEN 'OFFENSE'				
+				WHEN o.position IN ('LG','RG') THEN 'OFFENSE'
+				WHEN o.position IN ('C') THEN 'OFFENSE'
+		   END AS position_side_of_ball_cff
+		  ,sob.position_side_of_ball AS position_side_of_ball_bane
+		  ,CAST(o.grade AS NUMERIC(5,2)) AS cff_grade
+	FROM [CFFUltimate].dbo.offense o
+	INNER JOIN [CFFUltimate].dbo.plays pl
+		ON o.play_id = pl.play_id
+	INNER JOIN #temp_player_side_of_ball sob
+		ON o.gsis_player_id = sob.ncaa_gsis_id
+		AND sob.id_order = 1
+	WHERE pl.season = @cff_season
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	Create a table with the player's game grade. Just sum and/or average the CFF grade he 
+	gets on every play by game. Exclude plays where he is not playing on the same side of
+	ball as his position in the database.
+
+	TEMP TABLES:
+		#temp_cff_game_grades
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cff_game_grades exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_game_grades') IS NOT NULL
+		DROP TABLE #temp_cff_game_grades
+
+	SELECT ncaa_gsis_id
+		  ,gsis_game_key
+		  ,season
+		  ,school_code
+		  ,position
+		  ,SUM(CASE WHEN position_side_of_ball_cff = position_side_of_ball_bane THEN cff_grade ELSE 0 END) AS cff_grade_sum
+		  ,SUM(CASE WHEN position_side_of_ball_cff = position_side_of_ball_bane THEN 1 ELSE 0 END) AS cff_grade_plays
+		  ,AVG(CASE WHEN position_side_of_ball_cff = position_side_of_ball_bane THEN cff_grade ELSE NULL END) AS cff_grade_avg
+	INTO #temp_cff_game_grades
+	FROM #temp_cff_play_grades pg
+	GROUP BY pg.ncaa_gsis_id
+		,gsis_game_key
+		,season
+		,school_code
+		,position
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Create a table with the average and standard deviation game grade by position.
+
+	TMEP TABLES:
+		#temp_cff_game_grades_position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cff_game_grades_position exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_game_grades_position') IS NOT NULL
+		DROP TABLE #temp_cff_game_grades_position
+
+	SELECT position
+		,season
+		,SUM(cff_grade) AS cff_grade_sum_pos
+		,COUNT(*) AS cff_grade_plays_pos
+		,AVG(cff_grade) AS cff_grade_avg_pos
+		,STDEV(cff_grade) AS cff_grade_stdev_pos
+	INTO #temp_cff_game_grades_position
+	FROM #temp_cff_play_grades
+	GROUP BY position
+		,season
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Join the player game grade to the position average game grade to create a game z-score grade.
+
+	OUTPUT TABLES:
+		analysis_players_cff_game_grades
+		
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	DELETE FROM analysis_players_cff_game_grades
+	WHERE season = @cff_season
+
+	INSERT INTO analysis_players_cff_game_grades
+	SELECT gg.ncaa_gsis_id
+		  ,gsis_game_key
+		  ,gg.season
+		  ,school_code
+		  ,sc.ncaa_club_id
+		  ,cff_grade_avg
+		  ,(cff_grade_avg - cff_grade_avg_pos) / NULLIF(cff_grade_stdev_pos,0) AS cff_grade_z_score
+		  ,CASE WHEN (cff_grade_avg - cff_grade_avg_pos) / NULLIF(cff_grade_stdev_pos,0) <= -0.125 THEN 'BAD'
+				WHEN (cff_grade_avg - cff_grade_avg_pos) / NULLIF(cff_grade_stdev_pos,0) >= 0.125 THEN 'GOOD'
+				ELSE 'AVERAGE'
+		   END AS cff_grade_bucket
+	FROM #temp_cff_game_grades gg
+	INNER JOIN #temp_cff_game_grades_position pos
+		ON gg.position = pos.position
+		AND gg.season = pos.season
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON gg.school_code = sc.code
+	WHERE gg.ncaa_gsis_id <> 0
+		AND gg.gsis_game_key IS NOT NULL
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+
+	Create a table noting a player's side of the ball in the database. Add an order variable
+	so when you join to this table you can join where order = 1 to eliminate duplicate players.
+	There usually aren't many, just out of extra caution.
+
+	temp TABLES:
+		#temp_player_side_of_ball_pro
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	DECLARE @pff_season INT
+	SET @pff_season = (SELECT MAX(season) FROM PFFUltimate.dbo.plays)
+
+
+	-- Check if #temp_player_side_of_ball_pro exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_side_of_ball_pro') IS NOT NULL
+		DROP TABLE #temp_player_side_of_ball_pro
+
+	SELECT nfl_id AS nfl_player_id
+		  ,RANK() OVER (PARTITION BY nfl_id ORDER BY pl.id, po.id) AS id_order
+	      ,translation AS position
+		  ,UPPER(team) AS position_side_of_ball
+	INTO #temp_player_side_of_ball_pro
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE nfl_id IS NOT NULL
+		AND is_deleted = 0
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+
+	Create a table of all the PFF Defensive grades.  Then append onto that all the PFF Offensive grades.
+
+	temp TABLES:
+		#temp_pff_play_grades
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+	-- Check if #temp_pff_play_grades exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_play_grades') IS NOT NULL
+		DROP TABLE #temp_pff_play_grades
+
+	SELECT gsis_player_id AS nfl_player_id
+		  ,d.gsis_game_id AS gsis_game_key
+		  ,season
+		  ,team AS team_code
+		  ,CASE WHEN d.position IN ('NT','NLT','NRT') THEN 'NT'
+				WHEN d.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DT'
+				WHEN d.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DE'
+				WHEN d.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'IB'
+				WHEN d.position IN ('LOLB','ROLB') THEN 'OB'
+				WHEN d.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'CB'
+				WHEN d.position IN ('FS','FSL','FSR') THEN 'FS'
+				WHEN d.position IN ('SS','SSL','SSR') THEN 'SS'
+				WHEN d.position IN ('QB') THEN 'QB'
+				WHEN d.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'RB'
+				WHEN d.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'FB'
+				WHEN d.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'WR'
+				WHEN d.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'TE'				
+				WHEN d.position IN ('RT','LT') THEN 'OT'				
+				WHEN d.position IN ('LG','RG') THEN 'OG'
+				WHEN d.position IN ('C') THEN 'OC'
+		   END AS position_pff
+		  ,sob.position
+		  ,CASE WHEN d.position IN ('NT','NLT','NRT') THEN 'DEFENSE'
+				WHEN d.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DEFENSE'
+				WHEN d.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DEFENSE'
+				WHEN d.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'DEFENSE'
+				WHEN d.position IN ('LOLB','ROLB') THEN 'DEFENSE'
+				WHEN d.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'DEFENSE'
+				WHEN d.position IN ('FS','FSL','FSR') THEN 'DEFENSE'
+				WHEN d.position IN ('SS','SSL','SSR') THEN 'DEFENSE'
+				WHEN d.position IN ('QB') THEN 'OFFENSE'
+				WHEN d.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'OFFENSE'
+				WHEN d.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'OFFENSE'
+				WHEN d.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'OFFENSE'
+				WHEN d.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'OFFENSE'				
+				WHEN d.position IN ('RT','LT') THEN 'OFFENSE'				
+				WHEN d.position IN ('LG','RG') THEN 'OFFENSE'
+				WHEN d.position IN ('C') THEN 'OFFENSE'
+		   END AS position_side_of_ball_pff
+		  ,sob.position_side_of_ball AS position_side_of_ball_bane
+		  ,CAST(d.grade AS NUMERIC(5,2)) AS pff_grade
+	INTO #temp_pff_play_grades
+	FROM [PFFUltimate].dbo.defense d
+	INNER JOIN [PFFUltimate].dbo.plays pl
+		ON d.play_id = pl.play_id
+	INNER JOIN #temp_player_side_of_ball_pro sob
+		ON d.gsis_player_id = sob.nfl_player_id
+		AND sob.id_order = 1
+	WHERE pl.season = @pff_season
+
+
+	INSERT INTO #temp_pff_play_grades
+    SELECT gsis_player_id AS nfl_player_id
+		  ,o.gsis_game_id AS gsis_game_key
+		  ,season AS season
+		  ,team AS team_code
+		  ,CASE WHEN o.position IN ('NT','NLT','NRT') THEN 'NT'
+				WHEN o.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DT'
+				WHEN o.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DE'
+				WHEN o.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'IB'
+				WHEN o.position IN ('LOLB','ROLB') THEN 'OB'
+				WHEN o.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'CB'
+				WHEN o.position IN ('FS','FSL','FSR') THEN 'FS'
+				WHEN o.position IN ('SS','SSL','SSR') THEN 'SS'
+				WHEN o.position IN ('QB') THEN 'QB'
+				WHEN o.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'RB'
+				WHEN o.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'FB'
+				WHEN o.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'WR'
+				WHEN o.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'TE'				
+				WHEN o.position IN ('RT','LT') THEN 'OT'				
+				WHEN o.position IN ('LG','RG') THEN 'OG'
+				WHEN o.position IN ('C') THEN 'OC'
+		   END AS position_pff
+		  ,sob.position
+		  ,CASE WHEN o.position IN ('NT','NLT','NRT') THEN 'DEFENSE'
+				WHEN o.position IN ('DLiT','DLoT','DLT','DRiT','DRoT','DRT') THEN 'DEFENSE'
+				WHEN o.position IN ('DLE','DRE','LE','LEO','RE','REO') THEN 'DEFENSE'
+				WHEN o.position IN ('LB-FS','LB-SiL','LB-SiR','LB-SL','LB-SoL','LB-SoR','LB-SR','LB-WL','LB-WR','LILB','LLB','MLB','RILB','RLB') THEN 'DEFENSE'
+				WHEN o.position IN ('LOLB','ROLB') THEN 'DEFENSE'
+				WHEN o.position IN ('LCB','RCB','SCBiL','SCBiR','SCBL','SCBoL','SCBoR','SCBR') THEN 'DEFENSE'
+				WHEN o.position IN ('FS','FSL','FSR') THEN 'DEFENSE'
+				WHEN o.position IN ('SS','SSL','SSR') THEN 'DEFENSE'
+				WHEN o.position IN ('QB') THEN 'OFFENSE'
+				WHEN o.position IN ('HB','HB-iL','HB-iR','HB-L','HB-oL','HB-oR','HB-R') THEN 'OFFENSE'
+				WHEN o.position IN ('FB','FB-iL','FB-iR','FB-L','FB-oL','FB-oR','FB-R','MFB') THEN 'OFFENSE'
+				WHEN o.position IN ('LWR','RWR','SLiWR','SLoWR','SLWR','SRiWR','SRoWR','SRWR') THEN 'OFFENSE'
+				WHEN o.position IN ('TE-F','TE-iL','TE-iR','TE-L','TE-oL','TE-oR','TE-R') THEN 'OFFENSE'				
+				WHEN o.position IN ('RT','LT') THEN 'OFFENSE'				
+				WHEN o.position IN ('LG','RG') THEN 'OFFENSE'
+				WHEN o.position IN ('C') THEN 'OFFENSE'
+		   END AS position_side_of_ball_pff
+		  ,sob.position_side_of_ball AS position_side_of_ball_bane
+		  ,CAST(o.grade AS NUMERIC(5,2)) AS pff_grade
+	FROM [PFFUltimate].dbo.offense o
+	INNER JOIN [PFFUltimate].dbo.plays pl
+		ON o.play_id = pl.play_id
+	INNER JOIN #temp_player_side_of_ball_pro sob
+		ON o.gsis_player_id = sob.nfl_player_id
+		AND sob.id_order = 1
+	WHERE pl.season = @pff_season
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)
+
+
+	Create a table with the player's game grade. Just sum and/or average the PFF grade he 
+	gets on every play by game. Exclude plays where he is not playing on the same side of
+	ball as his position in the database.
+
+	TEMP TABLES:
+		#temp_pff_game_grades
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_pff_game_grades exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_game_grades') IS NOT NULL
+		DROP TABLE #temp_pff_game_grades
+
+	SELECT nfl_player_id
+		  ,gsis_game_key
+		  ,season
+		  ,team_code
+		  ,position
+		  ,SUM(CASE WHEN position_side_of_ball_pff = position_side_of_ball_bane THEN pff_grade ELSE 0 END) AS pff_grade_sum
+		  ,SUM(CASE WHEN position_side_of_ball_pff = position_side_of_ball_bane THEN 1 ELSE 0 END) AS pff_grade_plays
+		  ,AVG(CASE WHEN position_side_of_ball_pff = position_side_of_ball_bane THEN pff_grade ELSE NULL END) AS pff_grade_avg
+	INTO #temp_pff_game_grades
+	FROM #temp_pff_play_grades pg
+	GROUP BY pg.nfl_player_id
+		,gsis_game_key
+		,season
+		,team_code
+		,position
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+
+	Create a table with the average and standard deviation game grade by position.
+
+	TMEP TABLES:
+		#temp_pff_game_grades_position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_pff_game_grades_position exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_game_grades_position') IS NOT NULL
+		DROP TABLE #temp_pff_game_grades_position
+
+	SELECT position
+		,season
+		,SUM(pff_grade) AS pff_grade_sum_pos
+		,COUNT(*) AS pff_grade_plays_pos
+		,AVG(pff_grade) AS pff_grade_avg_pos
+		,STDEV(pff_grade) AS pff_grade_stdev_pos
+	INTO #temp_pff_game_grades_position
+	FROM #temp_pff_play_grades
+	GROUP BY position
+		,season
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(10)
+
+
+	Join the player game grade to the position average game grade to create a game z-score grade.
+
+	OUTPUT TABLES:
+		analysis_players_pff_game_grades
+		
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	DELETE FROM analysis_players_pff_game_grades
+	WHERE season = @pff_season
+
+	INSERT INTO analysis_players_pff_game_grades
+	SELECT gg.nfl_player_id
+		  ,gsis_game_key
+		  ,gg.season
+		  ,team_code
+		  ,cl.nfl_club_id
+		  ,pff_grade_avg
+		  ,(pff_grade_avg - pff_grade_avg_pos) / NULLIF(pff_grade_stdev_pos,0) AS pff_grade_z_score
+		  ,CASE WHEN (pff_grade_avg - pff_grade_avg_pos) / NULLIF(pff_grade_stdev_pos,0) <= -0.125 THEN 'BAD'
+				WHEN (pff_grade_avg - pff_grade_avg_pos) / NULLIF(pff_grade_stdev_pos,0) >= 0.125 THEN 'GOOD'
+				ELSE 'AVERAGE'
+		   END AS pff_grade_bucket
+	FROM #temp_pff_game_grades gg
+	INNER JOIN #temp_pff_game_grades_position pos
+		ON gg.position = pos.position
+		AND gg.season = pos.season
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON gg.team_code = cl.code
+
+
+
+
+	PROC_END:
+
+		RETURN @oReturnCD  
+
+END
+
+
+
+
+
+
+
+
+
+
+
+GO
+
+
