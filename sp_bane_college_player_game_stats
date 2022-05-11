@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats_20220311]    Script Date: 5/11/2022 12:18:47 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats]    Script Date: 5/11/2022 12:34:38 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -18,29 +18,15 @@ GO
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats_20220311] (@iSeason INT, @oReturnCD INT OUTPUT) as
+ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	college_player_game_advanced_stats
+Procedure Name:	sp_bane_college_player_game_stats
 Author:			Corey Krawiec
-Creation Date:	10/16/2017
+Creation Date:	10/16/2021
 Description:       
 
-	0) Prep tables
 	1) Blocking Stats
 	2) Run Defense Stats
 	3) Coverage Stats
@@ -70,38 +56,6 @@ BEGIN
 
 
 	SET @oReturnCD = 0 
-
-
-	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-	(0)
-	
-	Create the Cff games table - all the later steps pull from it so that you only get stats for games that aren't in CFF.
-
-	Also create the all star clubs table so you can exclude those games from the NonPro stats.  All Star Games have already been removed from the play level NonPro
-	stats so you don't have to specifically exclude them in that part of those steps in this program - just exclude them from the game level NonPro stats steps.
-
-	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-	-- Check if #temp_cff_games exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_cff_games') IS NOT NULL
-		DROP TABLE #temp_cff_games
-
-	SELECT DISTINCT gsis_game_id
-	INTO #temp_cff_games
-	FROM [CFFUltimate].[dbo].[plays]
-
-
-	-- Check if #temp_all_star_clubs exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_all_star_clubs') IS NOT NULL
-		DROP TABLE #temp_all_star_clubs
-
-	SELECT ClubKey
-	INTO #temp_all_star_clubs
-	FROM NonProDB.dbo.Club cl
-	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
-		ON cl.TeamCode = sc.code
-	WHERE cl.Division = 'other'
 
 	
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -511,17 +465,17 @@ BEGIN
 		,gsis_game_key
 		,SUM(CASE WHEN pd.role_pff = 'COVERAGE' THEN 1 ELSE 0 END) AS play_count_pass_sum
 		,SUM(align_in_press) AS play_count_press_sum
-		,SUM(targeted_defender_primary) AS targeted_defender_primary_sum
-		,SUM(targeted_defender_secondary) AS targeted_defender_secondary_sum
-		,SUM(CASE WHEN targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
-		,SUM(responsible_for_coverage_safety) AS responsible_for_coverage_safety_sum
-		,SUM(completion_allowed) AS completion_allowed_sum
-		,SUM(CASE WHEN  completion_allowed = 1 THEN receiving_yards_play ELSE 0 END) AS completion_yards_allowed_sum
-		,SUM(completion_allowed_brv) AS completion_allowed_brv_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_primary ELSE 0 END) AS targeted_defender_primary_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_secondary ELSE 0 END) AS targeted_defender_secondary_sum
+		,SUM(CASE WHEN air_yards > 0 AND (targeted_defender_primary = 1 OR targeted_defender_secondary = 1) THEN 1 ELSE 0 END) AS targeted_defender_sum
+		,SUM(CASE WHEN air_yards > 0 THEN responsible_for_coverage_safety ELSE 0 END) AS responsible_for_coverage_safety_sum
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed ELSE 0 END) AS completion_allowed_sum
+		,SUM(CASE WHEN air_yards > 0 AND completion_allowed = 1 THEN receiving_yards_play ELSE 0 END) AS completion_yards_allowed_sum
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed_brv ELSE 0 END) AS completion_allowed_brv_sum
 		,SUM(CASE WHEN completion_allowed_brv = 1 AND penalty_defensive_holding = 1 THEN 5
 			WHEN completion_allowed_brv = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
-			WHEN completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
-			WHEN completion_allowed_brv = 1 THEN receiving_yards_play
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 THEN receiving_yards_play
 			ELSE 0 END)
 		AS completion_yards_allowed_brv_sum
 		,SUM(CASE WHEN pass_break_up_brv = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_brv_sum
@@ -694,7 +648,7 @@ BEGIN
 		,NULL AS team_touchdowns_allowed_on
 		,NULL AS expected_points_allowed_pff_sum
 		,GETDATE() AS updated_at
-	FROM NonProDB.dbo.Defensive de
+	FROM daily_build_non_pro_defense_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_coverage_stats np
@@ -703,18 +657,12 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND (de.PassDefences > 0 OR de.Interceptions > 0)
-		AND ac.ClubKey IS NULL
 
 
 	DROP TABLE #temp_non_pro_player_play_coverage_stats
@@ -1010,7 +958,7 @@ BEGIN
 		,NULL AS qb_disruption_weight_pff_sum
 		,NULL AS qb_disruption_weight_4_sum
 		,GETDATE() AS updated_at
-	FROM NonProDB.dbo.Defensive de
+	FROM daily_build_non_pro_defense_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_pass_rush_stats np
@@ -1019,18 +967,12 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND (de.Sacks > 0 OR de.QuarterbackHits > 0)
-		AND ac.ClubKey IS NULL
 
 
 	DROP TABLE #temp_non_pro_player_play_pass_rush_stats
@@ -1178,7 +1120,7 @@ BEGIN
 		,SUM(pressed) AS play_count_pressed_sum
 		,SUM(CASE WHEN targeted_receiver = 1 THEN 1 ELSE 0 END) AS target_sum
 		,SUM(CASE WHEN targeted_receiver_catchable = 1 THEN 1 ELSE 0 END) AS catchable_target_sum
-		,SUM(dropped_pass) AS drop_sum
+		,SUM(CASE WHEN role_pff = 'PASS ROUTE' THEN dropped_pass ELSE 0 END) AS drop_sum
 		,SUM(reception) AS reception_sum
 		,SUM(receiving_yards) AS receiving_yards_sum
 		,SUM(receiving_yards_after_catch) AS receiving_yards_after_catch_sum
@@ -1339,7 +1281,7 @@ BEGIN
 		,NULL AS catch_probability_derrick_target_sum
 		,NULL AS catch_probability_derrick_sum
 		,GETDATE() AS updated_at
-	FROM NonProDB.dbo.Receiving de
+	FROM daily_build_non_pro_receiving_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_receiving_stats np
@@ -1348,17 +1290,11 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
-		AND ac.ClubKey IS NULL
 
 
 	DROP TABLE #temp_non_pro_player_play_receiving_stats
@@ -1743,7 +1679,7 @@ BEGIN
 		,NULL AS scrambling_successes
 		,NULL AS scrambling_touchdowns
 		,NULL AS scrambling_fumbles
-	FROM NonProDB.dbo.Rushing de
+	FROM daily_build_non_pro_rushing_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_running_stats np
@@ -1752,17 +1688,11 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
-		AND ac.ClubKey IS NULL
 
 
 	DROP TABLE #temp_non_pro_player_play_running_stats
@@ -2057,7 +1987,7 @@ BEGIN
 		,GETDATE() AS updated_at
 		,NULL AS defensive_touchdowns
 		,NULL AS missed_tackles
-	FROM NonProDB.dbo.Defensive de
+	FROM daily_build_non_pro_defense_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_tackling_stats np
@@ -2066,17 +1996,11 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
-		AND ac.ClubKey IS NULL
 
 
 -- Check if #temp_non_pro_player_defensive_tds_stats exists, if it does drop it
@@ -2087,22 +2011,16 @@ BEGIN
 		,de.GameKey AS gsis_game_key
 		,SUM(CASE WHEN ReturnType IN (1,4) THEN Touchdowns ELSE 0 END) AS defensive_touchdowns
 	INTO #temp_non_pro_player_defensive_tds_stats
-	FROM NonProDB.dbo.[Returns] de
+	FROM daily_build_non_pro_returns_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
-	WHERE cf.gsis_game_id IS NULL
-		AND de.PlayerID NOT LIKE '%[^0-9]%'
+	WHERE de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
-		AND ac.ClubKey IS NULL
 	GROUP BY de.PlayerID
 		,de.GameKey
 	HAVING SUM(CASE WHEN ReturnType IN (1,4) THEN Touchdowns ELSE 0 END) > 0
@@ -2450,7 +2368,7 @@ BEGIN
 		,NULL AS passing_catch_probability_derrick_sum
 		,NULL AS passing_catch_probability_derrick_completion_sum
 		,GETDATE() AS updated_at
-	FROM NonProDB.dbo.Passing de
+	FROM daily_build_non_pro_passing_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_passing_stats np
@@ -2459,17 +2377,11 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
-		AND ac.ClubKey IS NULL
 
 
 	DROP TABLE #temp_non_pro_player_play_passing_stats
@@ -2900,24 +2812,18 @@ BEGIN
 		,NULL AS kickoff_return_touchdowns
 		,NULL AS kickoff_tackles
 		,NULL AS kickoff_assists
-	FROM NonProDB.dbo.PlaceKicking de
+	FROM daily_build_non_pro_placekicking_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
 		ON de.GameKey = np.gsis_game_key
 		AND de.PlayerID = np.gsis_player_id
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND (de.FGMissed > 0 OR de.FGMade > 0 OR de.FGBlocked > 0 OR de.XPMissed > 0 OR de.XPMade > 0 OR de.XPBlocked > 0)
-		AND ac.ClubKey IS NULL
 
 
 --Add kickoffs
@@ -2952,24 +2858,18 @@ BEGIN
 		,NULL AS kickoff_return_touchdowns
 		,NULL AS kickoff_tackles
 		,NULL AS kickoff_assists
-	FROM NonProDB.dbo.Kickoffs de
+	FROM daily_build_non_pro_kickoff_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
 		ON de.GameKey = np.gsis_game_key
 		AND de.PlayerID = np.gsis_player_id
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND de.Number > 0
-		AND ac.ClubKey IS NULL
 
 
 --Add punts
@@ -3004,7 +2904,7 @@ BEGIN
 		,NULL AS kickoff_return_touchdowns
 		,NULL AS kickoff_tackles
 		,NULL AS kickoff_assists
-	FROM NonProDB.dbo.Punting de
+	FROM daily_build_non_pro_punting_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
@@ -3013,18 +2913,12 @@ BEGIN
 	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON de.PlayerID = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND de.Number > 0
-		AND ac.ClubKey IS NULL
 
 
 --Add kickoff returns
@@ -3065,19 +2959,13 @@ BEGIN
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
 		ON de.GameKey = np.gsis_game_key
 		AND de.PlayerID = np.gsis_player_id
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND de.ReturnType = 2
 		AND de.Number > 0
-		AND ac.ClubKey IS NULL
 
 
 --Add punt returns
@@ -3112,25 +3000,19 @@ BEGIN
 		,NULL AS kickoff_return_touchdowns
 		,NULL AS kickoff_tackles
 		,NULL AS kickoff_assists
-	FROM NonProDB.dbo.[Returns] de
+	FROM daily_build_non_pro_returns_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
 		ON de.GameKey = np.gsis_game_key
 		AND de.PlayerID = np.gsis_player_id
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND de.ReturnType = 3
 		AND de.Number > 0
-		AND ac.ClubKey IS NULL
 
 
 --Add ST tackles
@@ -3165,24 +3047,18 @@ BEGIN
 		,NULL AS kickoff_return_touchdowns
 		,(STTackles) AS kickoff_tackles
 		,(STAssists) AS kickoff_assists
-	FROM NonProDB.dbo.Defensive de
+	FROM daily_build_non_pro_defense_stats de
 	INNER JOIN NonProDB.dbo.Game ga
 		ON de.GameKey = ga.GameKey
 	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
 		ON de.GameKey = np.gsis_game_key
 		AND de.PlayerID = np.gsis_player_id
-	LEFT JOIN #temp_cff_games cf
-		ON de.GameKey = cf.gsis_game_id
-	LEFT JOIN #temp_all_star_clubs ac
-		ON de.ClubKey = ac.ClubKey
 	WHERE np.gsis_game_key IS NULL
-		AND cf.gsis_game_id IS NULL
 		AND de.PlayerID NOT LIKE '%[^0-9]%'
 		AND de.PlayerID NOT LIKE ''
 		AND de.PlayerID IS NOT NULL
 		AND de.PlayerID <> '0'
 		AND (de.STTackles > 0 OR de.STAssists > 0)
-		AND ac.ClubKey IS NULL
 
 
 --Sum and insert into the table for Bane step
@@ -4268,6 +4144,8 @@ BEGIN
 		AND gr.gsis_player_id not in (279281,329499,363527)
 
 
+
+	ALTER INDEX ALL ON [bane_college_player_game_playtimes] REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	RETURN @oReturnCD
