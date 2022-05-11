@@ -1,0 +1,1617 @@
+
+
+
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_player_game_stats_20211202]    Script Date: 5/11/2022 2:11:26 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_bane_pro_player_game_stats_20211202] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_bane_pro_player_game_stats
+Author:			Corey Krawiec
+Creation Date:	10/16/2017
+Description:       
+
+	1) Blocking Stats
+	2) Run Defense Stats
+	3) Coverage Stats
+	4) Pass Rush Stats
+	5) Receiving Stats
+	6) Running Stats
+	7) Tackling Stats
+	8) Passing Stats
+	9) Special Teams Stats
+
+				
+Input Parameters:
+	@iSeason
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+BEGIN 
+
+
+	SET @oReturnCD = 0 
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+	
+	Blocking Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_blocking_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_blocking_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_blocking_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_blocking_stats
+
+	SELECT pb.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN 1 ELSE 0 END) AS pass_block_count
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') THEN 1 ELSE 0 END) AS run_block_count
+		,SUM(qb_pressure_allowed) AS qb_pressure_allowed_sum
+		,SUM(qb_sack_allowed) AS qb_sack_allowed_sum
+		,SUM(qb_hit_allowed) AS qb_hit_allowed_sum
+		,SUM(qb_hurry_allowed) AS qb_hurry_allowed_sum
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN beaten_by_defender ELSE 0 END) AS beaten_by_defender_sum
+		,SUM(CASE WHEN penalty_offensive_holding = 1 OR penalty_illegal_use_of_hands = 1 THEN 1 ELSE 0 END) AS penalty_sum
+		,SUM(CASE WHEN qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1 OR (role_pff IN ('PASS BLOCK') AND penalty_offensive_holding = 1) THEN 1 ELSE 0 END) AS disruption_allowed_no_beat_sum
+		,SUM(CASE WHEN qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1 OR (role_pff IN ('PASS BLOCK') AND (beaten_by_defender = 1 OR penalty_offensive_holding = 1)) THEN 1 ELSE 0 END) AS disruption_allowed_sum
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND pff_grade > 0 THEN 1 ELSE 0 END) AS run_block_win_sum
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND (pff_comment LIKE '%PBL%' OR pff_comment LIKE '%PBR%') THEN 1 ELSE 0 END) AS play_count_run_block_pull_sum
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND (pff_comment LIKE '%PBL%' OR pff_comment LIKE '%PBR%') AND pff_grade > 0 THEN 1 ELSE 0 END) AS run_block_pull_win_sum
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND pff_grade <= -1.5 THEN -3.9251967
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade = -1.0 THEN -1.4975551
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade = -0.5 THEN -0.5580605
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade = 0.0 THEN 0.1888047
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade = 0.5 THEN 1.2645362
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade = 1.0 THEN 4.4260029
+				WHEN role_pff IN ('RUN BLOCK') AND pff_grade >= 1.5 THEN 10.2192846
+				ELSE 0 END) AS running_yards_created_sum
+		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND pff_grade < 0 THEN 1 ELSE 0 END) AS run_block_loss_sum
+		,GETDATE() AS updated_at
+		,SUM(CASE WHEN oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS play_count_lt
+		,SUM(CASE WHEN oa.position_blt IN ('LG') THEN 1 ELSE 0 END) AS play_count_lg
+		,SUM(CASE WHEN oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS play_count_oc
+		,SUM(CASE WHEN oa.position_blt IN ('RG') THEN 1 ELSE 0 END) AS play_count_rg
+		,SUM(CASE WHEN oa.position_blt IN ('RT') THEN 1 ELSE 0 END) AS play_count_rt
+		,SUM(CASE WHEN oa.receiver_type IS NOT NULL THEN 1 ELSE 0 END) AS play_count_eligible_receiver
+	INTO #temp_bane_pro_player_blocking_stats
+	FROM [pro_player_play_blocking_facts] pb
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON pb.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_result_facts] res --The play results table
+		ON pb.pff_play_id = res.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON pb.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON pb.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_running_facts] ru --The play run table
+		ON pb.pff_play_id = ru.pff_play_id
+	INNER JOIN [pro_play_penalty_facts] pp --The play penalty table
+		ON pb.pff_play_id = pp.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON pb.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_offense_alignment_facts] oa --The player position table
+		ON pb.pff_pp_id = oa.pff_pp_id
+	LEFT JOIN [pro_player_play_offense_grade_facts] gof --The player grade table
+		ON pb.pff_pp_id = gof.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON PB.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_offensive_holding_play = 1))
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY pb.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+		
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_blocking_stats]
+	SET player = te.player
+		,season = te.season
+		,pass_block_count = te.pass_block_count
+		,run_block_count = te.run_block_count
+		,qb_pressure_allowed_sum = te.qb_pressure_allowed_sum
+		,qb_sack_allowed_sum = te.qb_sack_allowed_sum
+		,qb_hit_allowed_sum = te.qb_hit_allowed_sum
+		,qb_hurry_allowed_sum = te.qb_hurry_allowed_sum
+		,beaten_by_defender_sum = te.beaten_by_defender_sum
+		,penalty_sum = te.penalty_sum
+		,disruption_allowed_no_beat_sum = te.disruption_allowed_no_beat_sum
+		,disruption_allowed_sum = te.disruption_allowed_sum
+		,run_block_win_sum = te.run_block_win_sum
+		,play_count_run_block_pull_sum = te.play_count_run_block_pull_sum
+		,run_block_pull_win_sum = te.run_block_pull_win_sum
+		,running_yards_created_sum = te.running_yards_created_sum
+		,run_block_loss_sum = te.run_block_loss_sum
+		,updated_at = te.updated_at
+		,play_count_lt = te.play_count_lt
+		,play_count_lg = te.play_count_lg
+		,play_count_oc = te.play_count_oc
+		,play_count_rg = te.play_count_rg
+		,play_count_rt = te.play_count_rt
+		,play_count_eligible_receiver = te.play_count_eligible_receiver
+	FROM #temp_bane_pro_player_blocking_stats te
+	WHERE [bane_pro_player_blocking_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_blocking_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_blocking_stats].season <> te.season
+			OR [bane_pro_player_blocking_stats].pass_block_count <> te.pass_block_count
+			OR [bane_pro_player_blocking_stats].run_block_count <> te.run_block_count
+			OR [bane_pro_player_blocking_stats].qb_pressure_allowed_sum <> te.qb_pressure_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_sack_allowed_sum <> te.qb_sack_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_hit_allowed_sum <> te.qb_hit_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_hurry_allowed_sum <> te.qb_hurry_allowed_sum
+			OR [bane_pro_player_blocking_stats].beaten_by_defender_sum <> te.beaten_by_defender_sum
+			OR [bane_pro_player_blocking_stats].penalty_sum <> te.penalty_sum
+			OR [bane_pro_player_blocking_stats].disruption_allowed_no_beat_sum <> te.disruption_allowed_no_beat_sum
+			OR [bane_pro_player_blocking_stats].disruption_allowed_sum <> te.disruption_allowed_sum
+			OR [bane_pro_player_blocking_stats].run_block_win_sum <> te.run_block_win_sum
+			OR [bane_pro_player_blocking_stats].play_count_run_block_pull_sum <> te.play_count_run_block_pull_sum
+			OR [bane_pro_player_blocking_stats].run_block_pull_win_sum <> te.run_block_pull_win_sum
+			OR [bane_pro_player_blocking_stats].running_yards_created_sum <> te.running_yards_created_sum
+			OR [bane_pro_player_blocking_stats].run_block_loss_sum <> te.run_block_loss_sum
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_lt,0) <> ISNULL(te.play_count_lt,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_lg,0) <> ISNULL(te.play_count_lg,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_oc,0) <> ISNULL(te.play_count_oc,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_rg,0) <> ISNULL(te.play_count_rg,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_rt,0) <> ISNULL(te.play_count_rt,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_eligible_receiver,0) <> ISNULL(te.play_count_eligible_receiver,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_blocking_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_blocking_stats te
+	LEFT JOIN [bane_pro_player_blocking_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_blocking_stats]
+	FROM [bane_pro_player_blocking_stats] ba
+	LEFT JOIN #temp_bane_pro_player_blocking_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_blocking_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+	
+	Run Defense Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_run_defense_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Check if #temp_bane_pro_player_run_defense_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_run_defense_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_run_defense_stats
+
+	SELECT pg.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,COUNT(pg.pff_pp_id) AS run_defense_count
+		,SUM(rushing_yards_play) AS rush_yards_allowed_sum
+		,SUM(rushing_yards_play + (CASE WHEN pg.pff_grade IS NULL THEN 0 ELSE yardage_adjustment END) - (CASE WHEN double_teamed_def = 1 THEN 0.3929559 ELSE 0 END)) AS rush_yards_allowed_adjusted_sum	  
+		,SUM(rushing_yards_play_expected) AS expected_rush_yards_allowed_sum		  
+		,SUM(CASE WHEN rushing_yards_play < rushing_yards_play_expected THEN 1 ELSE 0 END) AS rush_below_expected_allowed_sum
+		,SUM(CASE WHEN (rushing_yards_play + (CASE WHEN pg.pff_grade IS NULL THEN 0 ELSE yardage_adjustment END) - (CASE WHEN double_teamed_def = 1 THEN 0.3929559 ELSE 0 END)) < rushing_yards_play_expected THEN 1 ELSE 0 END) AS rush_below_expected_allowed_adjusted_sum
+		,SUM(CASE WHEN pg.pff_grade > 0 THEN 1 ELSE 0 END) AS run_defense_win_sum
+		,SUM(CASE WHEN pg.pff_grade <= -1.5 THEN -12.5610095
+				WHEN pg.pff_grade = -1.0 THEN -2.2789676
+				WHEN pg.pff_grade = -0.5 THEN -1.1586418
+				WHEN pg.pff_grade = 0.0 THEN 0.0827208
+				WHEN pg.pff_grade = 0.5 THEN 0.8720326
+				WHEN pg.pff_grade = 1.0 THEN 1.9900306
+				WHEN pg.pff_grade > 1.5 THEN 4.5905714
+				WHEN pg.pff_grade >= 2.0 THEN 5.429673
+		ELSE 0 END) AS running_yards_destroyed_sum
+		,SUM(CASE WHEN pg.pff_grade < 0 THEN 1 ELSE 0 END) AS run_defense_loss_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_run_defense_stats
+	FROM [pro_player_play_defense_grade_facts] pg
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON pg.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON pg.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON pg.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_result_facts] re --The play results table
+		ON pg.pff_play_id = re.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON pg.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_tackling_facts] ta --The player tackle table
+		ON pg.pff_pp_id = ta.pff_pp_id
+	INNER JOIN [pro_player_play_defense_alignment_facts] da --The player position table
+		ON pg.pff_pp_id = da.pff_pp_id
+	LEFT JOIN [map_pff_grade_expected_rush_yards_adjustments] ya --The yard adjustment table
+		ON pg.pff_grade = ya.pff_grade
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON pg.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND is_no_play = 0
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+		--AND is_run = 1
+	GROUP BY pg.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_run_defense_stats]
+	SET player = te.player
+		,season = te.season
+		,run_defense_count = te.run_defense_count
+		,rush_yards_allowed_sum = te.rush_yards_allowed_sum
+		,rush_yards_allowed_adjusted_sum = te.rush_yards_allowed_adjusted_sum	  
+		,expected_rush_yards_allowed_sum = te.expected_rush_yards_allowed_sum
+		,rush_below_expected_allowed_sum = te.rush_below_expected_allowed_sum 
+		,rush_below_expected_allowed_adjusted_sum = te.rush_below_expected_allowed_adjusted_sum
+		,run_defense_win_sum = te.run_defense_win_sum
+		,running_yards_destroyed_sum = te.running_yards_destroyed_sum
+		,run_defense_loss_sum = te.run_defense_loss_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_run_defense_stats te
+	WHERE [bane_pro_player_run_defense_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_run_defense_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_run_defense_stats].run_defense_count <> te.run_defense_count
+		OR [bane_pro_player_run_defense_stats].rush_yards_allowed_sum <> te.rush_yards_allowed_sum
+		OR ROUND([bane_pro_player_run_defense_stats].rush_yards_allowed_adjusted_sum,1) <> ROUND(te.rush_yards_allowed_adjusted_sum,1)  
+		OR [bane_pro_player_run_defense_stats].expected_rush_yards_allowed_sum <> te.expected_rush_yards_allowed_sum
+		OR [bane_pro_player_run_defense_stats].rush_below_expected_allowed_sum <> te.rush_below_expected_allowed_sum 
+		OR [bane_pro_player_run_defense_stats].rush_below_expected_allowed_adjusted_sum <> te.rush_below_expected_allowed_adjusted_sum
+		OR [bane_pro_player_run_defense_stats].run_defense_win_sum <> te.run_defense_win_sum
+		OR ROUND([bane_pro_player_run_defense_stats].running_yards_destroyed_sum,1) <> ROUND(te.running_yards_destroyed_sum,1)
+		OR [bane_pro_player_run_defense_stats].run_defense_loss_sum <> te.run_defense_loss_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_run_defense_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_run_defense_stats te
+	LEFT JOIN [bane_pro_player_run_defense_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_run_defense_stats]
+	FROM [bane_pro_player_run_defense_stats] ba
+	LEFT JOIN #temp_bane_pro_player_run_defense_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_run_defense_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+	
+	Coverage Stats (as of 02/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_coverage_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Check if #temp_bane_pro_player_coverage_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_coverage_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_coverage_stats
+
+	SELECT ppas.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,SUM(CASE WHEN pd.role_pff = 'COVERAGE' THEN 1 ELSE 0 END) AS play_count_pass_sum
+		,SUM(align_in_press) AS play_count_press_sum
+		,SUM(targeted_defender_primary) AS targeted_defender_primary_sum
+		,SUM(targeted_defender_secondary) AS targeted_defender_secondary_sum
+		,SUM(CASE WHEN targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
+		,SUM(responsible_for_coverage_safety) AS responsible_for_coverage_safety_sum
+		,SUM(completion_allowed) AS completion_allowed_sum
+		,SUM(CASE WHEN  completion_allowed = 1 THEN receiving_yards_play ELSE 0 END) AS completion_yards_allowed_sum
+		,SUM(completion_allowed_brv) AS completion_allowed_brv_sum
+		,SUM(CASE WHEN completion_allowed_brv = 1 AND penalty_defensive_holding = 1 THEN 5
+			WHEN completion_allowed_brv = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
+			WHEN completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN completion_allowed_brv = 1 THEN receiving_yards_play
+			ELSE 0 END)
+		AS completion_yards_allowed_brv_sum
+		,SUM(CASE WHEN pass_break_up_brv = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_brv_sum
+		,SUM(CASE WHEN pass_break_up_pff = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_pff_sum
+		,SUM(CASE WHEN pass_break_up_play_on_ball = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_play_on_ball_sum 
+		,SUM(interception) AS interception_sum 
+		,SUM(CASE WHEN interception = 1 THEN 4 WHEN pass_break_up_brv = 1 THEN 1 ELSE 0 END) AS pass_break_up_weighted_sum
+		--,SUM(CASE WHEN completion_allowed_brv = 1 AND drop_by_covered_receiver = 0 AND penalty_defensive_holding = 0 AND penalty_defensive_pass_interference = 0 AND yards_after_catch_play_expected IS NOT NULL THEN CASE WHEN yards_after_catch_play <= yards_after_catch_play_expected THEN 1 ELSE 0 END ELSE 0 END) AS yards_after_catch_quick_close_sum  --Excluding the nulls takes care of passes that are a TD that are thrown into the end zone - they shouldn't be included
+		--,SUM(CASE WHEN completion_allowed_brv = 1 AND drop_by_covered_receiver = 0 AND penalty_defensive_holding = 0 AND penalty_defensive_pass_interference = 0 AND yards_after_catch_play_expected IS NOT NULL THEN 1 ELSE 0 END) AS yards_after_catch_opportunity_sum
+		,SUM(CASE WHEN (completion_allowed = 1 AND (yards_after_catch_play_expected IS NOT NULL OR touchdown_play = 1) AND (yards_after_catch_play > yards_after_catch_play_expected OR touchdown_play = 1)) 
+					OR penalty_defensive_holding = 1
+					OR penalty_defensive_pass_interference = 1
+			THEN 1 
+			ELSE 0 
+			END)
+		AS yards_after_catch_above_expected_sum  
+		,SUM(CASE WHEN targeted_defender_primary = 1 AND drop_by_covered_receiver = 0 AND (yards_after_catch_play_expected IS NOT NULL OR touchdown_play = 1 OR pass_result IN  ('INCOMPLETE','INTERCEPTION')) THEN 1 ELSE 0 END) AS yards_after_catch_opportunity_sum
+		,SUM(penalty_defensive_pass_interference) AS penalty_defensive_pass_interference_sum
+		,SUM(penalty_defensive_holding) AS penalty_defensive_holding_sum
+		,SUM(receiving_yards_play) AS team_receiving_yards_allowed_on
+		,SUM(rushing_yards_play) AS team_rushing_yards_allowed_on
+		,SUM(touchdown_play) AS team_touchdowns_allowed_on
+		,SUM(expected_points_allowed_pff) AS expected_points_allowed_pff_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_coverage_stats
+	FROM [pro_player_play_coverage_facts] ppas
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON ppas.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_result_facts] re --The play results table
+		ON ppas.pff_play_id = re.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON ppas.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON ppas.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_passing_facts] pa --The play type table
+		ON ppas.pff_play_id = pa.pff_play_id
+	INNER JOIN [pro_play_penalty_facts] pp --The play penalty table
+		ON ppas.pff_play_id = pp.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON ppas.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_defense_alignment_facts] pd --The player position table
+		ON ppas.pff_pp_id = pd.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ppas.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	 WHERE 1 = 1
+		AND season >= @iSeason
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1)))
+		--AND is_pass = 1
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY ppas.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_coverage_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_pass_sum = te.play_count_pass_sum
+		,play_count_press_sum = te.play_count_press_sum
+		,targeted_defender_primary_sum = te.targeted_defender_primary_sum
+		,targeted_defender_secondary_sum = te.targeted_defender_secondary_sum
+		,targeted_defender_sum = te.targeted_defender_sum
+		,responsible_for_coverage_safety_sum = te.responsible_for_coverage_safety_sum
+		,completion_allowed_sum = te.completion_allowed_sum
+		,completion_yards_allowed_sum = te.completion_yards_allowed_sum
+		,completion_allowed_brv_sum = te.completion_allowed_brv_sum
+		,completion_yards_allowed_brv_sum = te.completion_yards_allowed_brv_sum
+		,pass_break_up_brv_sum = te.pass_break_up_brv_sum
+		,pass_break_up_pff_sum = te.pass_break_up_pff_sum
+		,pass_break_up_play_on_ball_sum = te.pass_break_up_play_on_ball_sum
+		,interception_sum = te.interception_sum
+		,pass_break_up_weighted_sum = te.pass_break_up_weighted_sum
+		,yards_after_catch_above_expected_sum = te.yards_after_catch_above_expected_sum  
+		,yards_after_catch_opportunity_sum = te.yards_after_catch_opportunity_sum
+		,penalty_defensive_pass_interference_sum = te.penalty_defensive_pass_interference_sum
+		,penalty_defensive_holding_sum = te.penalty_defensive_holding_sum
+		,team_receiving_yards_allowed_on = te.team_receiving_yards_allowed_on
+		,team_rushing_yards_allowed_on = te.team_rushing_yards_allowed_on
+		,team_touchdowns_allowed_on = te.team_touchdowns_allowed_on
+		,expected_points_allowed_pff_sum = te.expected_points_allowed_pff_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_coverage_stats te
+	WHERE [bane_pro_player_coverage_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_coverage_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_coverage_stats].play_count_pass_sum <> te.play_count_pass_sum
+		OR [bane_pro_player_coverage_stats].play_count_press_sum <> te.play_count_press_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_primary_sum <> te.targeted_defender_primary_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_secondary_sum <> te.targeted_defender_secondary_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_sum <> te.targeted_defender_sum
+		OR [bane_pro_player_coverage_stats].responsible_for_coverage_safety_sum <> te.responsible_for_coverage_safety_sum
+		OR [bane_pro_player_coverage_stats].completion_allowed_sum <> te.completion_allowed_sum
+		OR [bane_pro_player_coverage_stats].completion_yards_allowed_sum <> te.completion_yards_allowed_sum
+		OR [bane_pro_player_coverage_stats].completion_allowed_brv_sum <> te.completion_allowed_brv_sum
+		OR [bane_pro_player_coverage_stats].completion_yards_allowed_brv_sum <> te.completion_yards_allowed_brv_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_brv_sum <> te.pass_break_up_brv_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_pff_sum <> te.pass_break_up_pff_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_play_on_ball_sum <> te.pass_break_up_play_on_ball_sum
+		OR [bane_pro_player_coverage_stats].interception_sum <> te.interception_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_weighted_sum <> te.pass_break_up_weighted_sum
+		OR [bane_pro_player_coverage_stats].yards_after_catch_above_expected_sum <> te.yards_after_catch_above_expected_sum
+		OR [bane_pro_player_coverage_stats].yards_after_catch_opportunity_sum <> te.yards_after_catch_opportunity_sum
+		OR ISNULL([bane_pro_player_coverage_stats].penalty_defensive_pass_interference_sum,0) <> ISNULL(te.penalty_defensive_pass_interference_sum,0)
+		OR ISNULL([bane_pro_player_coverage_stats].penalty_defensive_holding_sum,0) <> ISNULL(te.penalty_defensive_holding_sum,0)
+		OR [bane_pro_player_coverage_stats].team_receiving_yards_allowed_on <> te.team_receiving_yards_allowed_on
+		OR [bane_pro_player_coverage_stats].team_rushing_yards_allowed_on <> te.team_rushing_yards_allowed_on
+		OR [bane_pro_player_coverage_stats].team_touchdowns_allowed_on <> te.team_touchdowns_allowed_on
+		OR ABS([bane_pro_player_coverage_stats].expected_points_allowed_pff_sum - te.expected_points_allowed_pff_sum) > 0.05
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_coverage_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_coverage_stats te
+	LEFT JOIN [bane_pro_player_coverage_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_coverage_stats]
+	FROM [bane_pro_player_coverage_stats] ba
+	LEFT JOIN #temp_bane_pro_player_coverage_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_coverage_stats
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+	
+	Pass Rush Stats (as of 08/2016)
+
+    OUTPUT TABLES:            
+		bane_pro_player_pass_rush_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Check if #temp_bane_pro_player_pass_rush_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_pass_rush_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_pass_rush_stats
+
+	SELECT pr.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,SUM(CASE WHEN pd.role_pff = 'PASS RUSH' THEN 1 ELSE 0 END) AS play_count_pass_sum
+		,SUM(drawn_offensive_holding) AS drawn_offensive_holding_sum
+		,SUM(qb_pressure) AS qb_pressure_sum
+		,SUM(qb_sack) AS qb_sack_sum
+		,SUM(qb_hit) AS qb_hit_sum
+		,SUM(qb_hurry) AS qb_hurry_sum
+		,SUM(batted_pass) AS batted_pass_sum
+		,SUM(CASE WHEN qb_sack = 1 THEN 1
+			WHEN qb_hit = 1 THEN 1
+			WHEN qb_hurry = 1 THEN 1
+			WHEN qb_pressure = 1 THEN 1
+			WHEN drawn_offensive_holding = 1 THEN 1
+			WHEN batted_pass = 1 THEN 1
+			ELSE 0
+			END)
+		AS qb_disruption_sum
+		,SUM(CASE WHEN qb_sack = 1 THEN 1
+			WHEN qb_hit = 1 THEN 1
+			WHEN qb_hurry = 1 THEN 1
+			WHEN qb_pressure = 1 THEN 1
+			WHEN drawn_offensive_holding = 1 THEN 1
+			WHEN batted_pass = 1 THEN 0
+			ELSE 0
+			END)
+		AS qb_disruption_no_batted_pass_sum
+		,SUM(CASE WHEN qb_sack = 1 THEN 1
+			WHEN drawn_offensive_holding = 1 THEN 1
+			WHEN qb_hit = 1 THEN 0.75
+			WHEN qb_hurry = 1 THEN 0.75
+			WHEN qb_pressure = 1 THEN 0.75	
+			WHEN batted_pass = 1 THEN 0.5				
+			ELSE 0
+			END)
+		AS qb_disruption_weight_pff_sum
+		,SUM(CASE WHEN qb_sack = 1 THEN 4
+			WHEN drawn_offensive_holding = 1 THEN 4
+			WHEN qb_hit = 1 THEN 1
+			WHEN qb_hurry = 1 THEN 1
+			WHEN qb_pressure = 1 THEN 1	
+			WHEN batted_pass = 1 THEN 0.5				
+			ELSE 0
+			END)
+		AS qb_disruption_weight_4_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_pass_rush_stats
+	FROM [pro_player_play_pass_rush_facts] pr
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON pr.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON pr.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON pr.pff_play_id = ty.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON pr.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_defense_alignment_facts] pd --The player play alignment table
+		ON pr.pff_pp_id = pd.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON pr.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	 WHERE 1 = 1
+		AND season >= @iSeason
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR drawn_offensive_holding = 1)))
+		--AND is_pass = 1
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+		--AND (unblocked = 0 OR unblocked IS NULL)
+		--AND (clean_up_pressure = 0 OR clean_up_pressure IS NULL)
+		--AND (pursuit_pressure = 0 OR pursuit_pressure IS NULL)
+	GROUP BY pr.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_pass_rush_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_pass_sum = te.play_count_pass_sum
+		,drawn_offensive_holding_sum = te.drawn_offensive_holding_sum
+		,qb_pressure_sum = te.qb_pressure_sum
+		,qb_sack_sum = te.qb_sack_sum
+		,qb_hit_sum = te.qb_hit_sum
+		,qb_hurry_sum = te.qb_hurry_sum
+		,batted_pass_sum = te.batted_pass_sum
+		,qb_disruption_sum = te.qb_disruption_sum
+		,qb_disruption_no_batted_pass_sum = te.qb_disruption_no_batted_pass_sum
+		,qb_disruption_weight_pff_sum = te.qb_disruption_weight_pff_sum
+		,qb_disruption_weight_4_sum = te.qb_disruption_weight_4_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_pass_rush_stats te
+	WHERE [bane_pro_player_pass_rush_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_pass_rush_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_pass_rush_stats].play_count_pass_sum <> te.play_count_pass_sum
+		OR ISNULL([bane_pro_player_pass_rush_stats].drawn_offensive_holding_sum,0) <> ISNULL(te.drawn_offensive_holding_sum,0)
+		OR [bane_pro_player_pass_rush_stats].qb_pressure_sum <> te.qb_pressure_sum
+		OR [bane_pro_player_pass_rush_stats].qb_sack_sum <> te.qb_sack_sum
+		OR [bane_pro_player_pass_rush_stats].qb_hit_sum <> te.qb_hit_sum
+		OR [bane_pro_player_pass_rush_stats].qb_hurry_sum <> te.qb_hurry_sum
+		OR [bane_pro_player_pass_rush_stats].batted_pass_sum <> te.batted_pass_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_sum <> te.qb_disruption_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_no_batted_pass_sum <> te.qb_disruption_no_batted_pass_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_weight_pff_sum <> te.qb_disruption_weight_pff_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_weight_4_sum <> te.qb_disruption_weight_4_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_pass_rush_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_pass_rush_stats te
+	LEFT JOIN [bane_pro_player_pass_rush_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_pass_rush_stats]
+	FROM [bane_pro_player_pass_rush_stats] ba
+	LEFT JOIN #temp_bane_pro_player_pass_rush_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_pass_rush_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+	
+	Receiving Stats
+
+    OUTPUT TABLES:            
+		bane_pro_player_receiving_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_receiving_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_receiving_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_receiving_stats
+
+	SELECT rec.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,SUM(CASE WHEN role_pff = 'PASS ROUTE' THEN 1 ELSE 0 END) AS play_count_route_sum
+		,SUM(pressed) AS play_count_pressed_sum
+		,SUM(CASE WHEN targeted_receiver = 1 THEN 1 ELSE 0 END) AS target_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 THEN 1 ELSE 0 END) AS catchable_target_sum
+		,SUM(dropped_pass) AS drop_sum
+		,SUM(reception) AS reception_sum
+		,SUM(receiving_yards) AS receiving_yards_sum
+		,SUM(receiving_yards_after_catch) AS receiving_yards_after_catch_sum
+		,SUM(receiving_yards_after_contact) AS receiving_yards_after_contact_sum
+		,SUM(receiving_fumble) AS receiving_fumble
+		,SUM(receiving_touchdown) AS receiving_touchdown_sum
+		,SUM(receiving_tackle_avoided) AS receiving_tackle_avoided_sum
+		,SUM(receiving_interception) AS receiving_interception_sum
+		,SUM(receiving_yards) + 20*SUM(receiving_touchdown) AS receiving_yards_adjusted_sum
+		,SUM(receiving_yards) + 20*SUM(receiving_touchdown) - 45*SUM(receiving_interception) AS receiving_yards_adjusted_with_int_sum
+		,SUM(CASE WHEN (drawn_defensive_holding = 1 OR drawn_illegal_contact = 1) AND penalty_yards_pff_play > 5 THEN 5
+				WHEN drawn_penalty_pff = 1 AND penalty_yards_pff_play > 0 THEN penalty_yards_pff_play 
+				ELSE 0 
+			END) 
+		AS penalty_yards_drawn_sum
+		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN 1 ELSE 0 END) AS catch_probability_target_sum
+		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS catch_probability_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS receiving_epa_target_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS receiving_epa_sum
+		,SUM(CASE WHEN targeted_receiver = 1 THEN air_yards ELSE 0 END) AS receiving_air_yards_sum
+		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 AND catch_probability_derrick IS NOT NULL THEN 1 ELSE 0 END) AS catch_probability_derrick_target_sum
+		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0  THEN catch_probability_derrick ELSE 0 END) AS catch_probability_derrick_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_receiving_stats
+	FROM [pro_player_play_receiving_facts] rec
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON rec.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_result_facts] res --The play results table
+		ON rec.pff_play_id = res.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON rec.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON rec.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_passing_facts] pa --The play pass table
+		ON rec.pff_play_id = pa.pff_play_id
+	INNER JOIN [pro_play_penalty_facts] pp --The play penalty table
+		ON rec.pff_play_id = pp.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON rec.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_offense_alignment_facts] oa --The player position table
+		ON rec.pff_pp_id = oa.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON rec.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1)))
+		--AND is_pass = 1
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY rec.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_receiving_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_route_sum = te.play_count_route_sum
+		,play_count_pressed_sum = te.play_count_pressed_sum
+		,target_sum = te.target_sum
+		,catchable_target_sum = te.catchable_target_sum
+		,drop_sum = te.drop_sum
+		,reception_sum = te.reception_sum
+		,receiving_yards_sum = te.receiving_yards_sum
+		,receiving_yards_after_catch_sum = te.receiving_yards_after_catch_sum
+		,receiving_yards_after_contact_sum = te.receiving_yards_after_contact_sum
+		,receiving_fumble = te.receiving_fumble
+		,receiving_touchdown_sum = te.receiving_touchdown_sum
+		,receiving_tackle_avoided_sum = te.receiving_tackle_avoided_sum
+		,receiving_interception_sum = te.receiving_interception_sum
+		,receiving_yards_adjusted_sum = te.receiving_yards_adjusted_sum
+		,receiving_yards_adjusted_with_int_sum = te.receiving_yards_adjusted_with_int_sum
+		,penalty_yards_drawn_sum = te.penalty_yards_drawn_sum
+		,catch_probability_target_sum = te.catch_probability_target_sum
+		,catch_probability_sum = te.catch_probability_sum
+		,receiving_epa_target_sum = te.receiving_epa_target_sum
+		,receiving_epa_sum = te.receiving_epa_sum
+		,receiving_air_yards_sum = te.receiving_air_yards_sum
+		,catch_probability_derrick_target_sum = te.catch_probability_derrick_target_sum
+		,catch_probability_derrick_sum = te.catch_probability_derrick_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_receiving_stats te
+	WHERE [bane_pro_player_receiving_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_receiving_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_receiving_stats].play_count_route_sum <> te.play_count_route_sum
+		 OR [bane_pro_player_receiving_stats].play_count_pressed_sum <> te.play_count_pressed_sum
+		 OR [bane_pro_player_receiving_stats].target_sum <> te.target_sum
+		 OR [bane_pro_player_receiving_stats].catchable_target_sum <> te.catchable_target_sum
+		 OR [bane_pro_player_receiving_stats].drop_sum <> te.drop_sum
+		 OR [bane_pro_player_receiving_stats].reception_sum <> te.reception_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_sum <> te.receiving_yards_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_after_catch_sum <> te.receiving_yards_after_catch_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_after_contact_sum <> te.receiving_yards_after_contact_sum
+		 OR [bane_pro_player_receiving_stats].receiving_fumble <> te.receiving_fumble
+		 OR [bane_pro_player_receiving_stats].receiving_touchdown_sum <> te.receiving_touchdown_sum
+		 OR [bane_pro_player_receiving_stats].receiving_tackle_avoided_sum <> te.receiving_tackle_avoided_sum
+		 OR [bane_pro_player_receiving_stats].receiving_interception_sum <> te.receiving_interception_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_adjusted_sum <> te.receiving_yards_adjusted_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_adjusted_with_int_sum <> te.receiving_yards_adjusted_with_int_sum
+		 OR ISNULL([bane_pro_player_receiving_stats].penalty_yards_drawn_sum,0) <> ISNULL(te.penalty_yards_drawn_sum,0)
+		 OR [bane_pro_player_receiving_stats].catch_probability_target_sum <> te.catch_probability_target_sum
+		 OR ROUND([bane_pro_player_receiving_stats].catch_probability_sum,1) <> ROUND(te.catch_probability_sum,1)
+		 OR [bane_pro_player_receiving_stats].receiving_epa_target_sum <> te.receiving_epa_target_sum
+		 OR ABS(ISNULL([bane_pro_player_receiving_stats].receiving_epa_sum,0) - ISNULL(te.receiving_epa_sum,0)) > 0.05
+		 OR [bane_pro_player_receiving_stats].receiving_air_yards_sum <> te.receiving_air_yards_sum
+		 OR [bane_pro_player_receiving_stats].catch_probability_derrick_target_sum <> te.catch_probability_derrick_target_sum
+		 OR ROUND([bane_pro_player_receiving_stats].catch_probability_derrick_sum,1) <> ROUND(te.catch_probability_derrick_sum,1)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_receiving_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_receiving_stats te
+	LEFT JOIN [bane_pro_player_receiving_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_receiving_stats]
+	FROM [bane_pro_player_receiving_stats] ba
+	LEFT JOIN #temp_bane_pro_player_receiving_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_receiving_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+	
+	Running Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_running_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_running_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_running_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_running_stats
+
+	SELECT run.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,SUM(CASE WHEN role_pff IN ('RUN','RUN BLOCK') AND is_scramble = 0 THEN 1 ELSE 0 END) AS play_count_run_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN 1 ELSE 0 END) AS run_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND is_two_point_conversion = 0 THEN 1 ELSE 0 END) AS run_no_2pt_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start >= 5 THEN 1 ELSE 0 END) AS run_no_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start <= 5 AND distance <= yards_from_opponent_end_zone_start THEN 1 ELSE 0 END) AS run_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND distance <= 3 THEN 1 ELSE 0 END) AS run_short_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND rushing_yards_play_expected IS NOT NULL THEN 1 ELSE 0 END) AS run_expected_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN running_yards ELSE 0 END) AS running_yards_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND is_two_point_conversion = 0 THEN running_yards ELSE 0 END) AS running_yards_no_2pt_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start >= 5 THEN running_yards ELSE 0 END) AS running_yards_no_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start <= 5 AND distance <= yards_from_opponent_end_zone_start THEN 1 ELSE 0 END) AS running_yards_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND distance <= 3 THEN running_yards ELSE 0 END) AS running_yards_short_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND rushing_yards_play_expected IS NOT NULL THEN running_yards ELSE 0 END) AS running_yards_expected_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND rushing_yards_play_expected IS NOT NULL THEN rushing_yards_play_expected ELSE 0 END) AS expected_running_yards_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN running_yards_after_contact ELSE 0 END) AS running_yards_after_contact_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND is_two_point_conversion = 0 THEN running_yards ELSE 0 END) AS running_yards_after_contact_no_2pt_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start >= 5 THEN running_yards ELSE 0 END) AS running_yards_after_contact_no_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN running_tackle_avoided ELSE 0 END) AS running_tackle_avoided_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND is_two_point_conversion = 0 THEN running_tackle_avoided ELSE 0 END) AS running_tackle_avoided_no_2pt_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start >= 5 THEN running_tackle_avoided ELSE 0 END) AS running_tackle_avoided_no_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND yards_from_opponent_end_zone_start <= 5 AND distance <= yards_from_opponent_end_zone_start AND success_defense_play = 0 THEN 1 ELSE 0 END) AS running_td_goal_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND distance <= 3 AND success_defense_play = 0 THEN 1 ELSE 0 END) AS running_success_short_sum
+		,SUM(running_yards) + 20*SUM(running_touchdown) AS running_yards_adjusted_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN running_fumble ELSE 0 END) AS running_fumble_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN running_touchdown ELSE 0 END) AS running_touchdown_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN point_of_attack_change ELSE 0 END) AS running_poa_change
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND run_point_of_attack_change_reason = 'VOLUNTARY' THEN 1 ELSE 0 END) AS running_poa_change_voluntary
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND run_point_of_attack_change_reason = 'VOLUNTARY' AND success_defense_play = 0 THEN 1 ELSE 0 END) AS running_poa_change_success
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND run_point_of_attack_change_reason = 'VOLUNTARY' AND rushing_yards_play > rushing_yards_play_expected THEN 1 ELSE 0 END) AS running_poa_change_above_expected
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS running_epa_attempt_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS running_epa_sum
+		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play > 0 THEN 1 ELSE 0 END) AS running_success_sum
+		,GETDATE() AS updated_at
+		,SUM(CASE WHEN is_scramble = 1 THEN 1 ELSE 0 END) AS scrambles
+		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_yards ELSE 0 END) AS scrambling_yards
+		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_tackle_avoided ELSE 0 END) AS scrambling_tackles_avoided
+		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS scrambling_epa_attempts
+		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS scrambling_epa
+		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play > 0 THEN 1 ELSE 0 END) AS scrambling_successes
+		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_touchdown ELSE 0 END) AS scrambling_touchdowns
+		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_fumble ELSE 0 END) AS scrambling_fumbles
+	INTO #temp_bane_pro_player_running_stats
+	FROM [pro_player_play_running_facts] run
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON run.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_result_facts] res --The play results table
+		ON run.pff_play_id = res.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON run.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON run.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_running_facts] ru --The play run table
+		ON run.pff_play_id = ru.pff_play_id
+	INNER JOIN [pro_play_penalty_facts] pp --The play penalty table
+		ON run.pff_play_id = pp.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON run.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [pro_player_play_offense_alignment_facts] oa --The player position table
+		ON run.pff_pp_id = oa.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON run.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND is_no_play = 0
+		--AND is_run = 1
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY run.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_running_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_run_sum = te.play_count_run_sum
+		,run_sum = te.run_sum
+		,run_no_2pt_sum = te.run_no_2pt_sum
+		,run_no_goal_sum = te.run_no_goal_sum
+		,run_goal_sum = te.run_goal_sum
+		,run_short_sum = te.run_short_sum
+		,run_expected_sum = te.run_expected_sum
+		,running_yards_sum = te.running_yards_sum
+		,running_yards_no_2pt_sum = te.running_yards_no_2pt_sum
+		,running_yards_no_goal_sum = te.running_yards_no_goal_sum
+		,running_yards_goal_sum = te.running_yards_goal_sum
+		,running_yards_short_sum = te.running_yards_short_sum
+		,running_yards_expected_sum = te.running_yards_expected_sum
+		,expected_running_yards_sum = te.expected_running_yards_sum
+		,running_yards_after_contact_sum = te.running_yards_after_contact_sum
+		,running_yards_after_contact_no_2pt_sum = te.running_yards_after_contact_no_2pt_sum
+		,running_yards_after_contact_no_goal_sum = te.running_yards_after_contact_no_goal_sum
+		,running_tackle_avoided_sum = te.running_tackle_avoided_sum
+		,running_tackle_avoided_no_2pt_sum = te.running_tackle_avoided_no_2pt_sum
+		,running_tackle_avoided_no_goal_sum = te.running_tackle_avoided_no_goal_sum
+		,running_td_goal_sum = te.running_td_goal_sum
+		,running_success_short_sum = te.running_success_short_sum
+		,running_yards_adjusted_sum = te.running_yards_adjusted_sum
+		,running_fumble_sum = te.running_fumble_sum
+		,running_touchdown_sum = te.running_touchdown_sum
+		,running_poa_change = te.running_poa_change
+		,running_poa_change_voluntary = te.running_poa_change_voluntary
+		,running_poa_change_success = te.running_poa_change_success
+		,running_poa_change_above_expected = te.running_poa_change_above_expected
+		,running_epa_attempt_sum = te.running_epa_attempt_sum
+		,running_epa_sum = te.running_epa_sum
+		,running_success_sum = te.running_success_sum
+		,updated_at = te.updated_at
+		,scrambles = te.scrambles
+		,scrambling_yards = te.scrambling_yards
+		,scrambling_tackles_avoided = te.scrambling_tackles_avoided
+		,scrambling_epa_attempts = te.scrambling_epa_attempts
+		,scrambling_epa = te.scrambling_epa
+		,scrambling_successes = te.scrambling_successes
+		,scrambling_touchdowns = te.scrambling_touchdowns
+		,scrambling_fumbles = te.scrambling_fumbles
+	FROM #temp_bane_pro_player_running_stats te
+	WHERE [bane_pro_player_running_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_running_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_running_stats].play_count_run_sum <> te.play_count_run_sum
+		OR [bane_pro_player_running_stats].run_sum <> te.run_sum
+		OR [bane_pro_player_running_stats].run_no_2pt_sum <> te.run_no_2pt_sum
+		OR [bane_pro_player_running_stats].run_no_goal_sum <> te.run_no_goal_sum
+		OR [bane_pro_player_running_stats].run_goal_sum <> te.run_goal_sum
+		OR [bane_pro_player_running_stats].run_short_sum <> te.run_short_sum
+		OR [bane_pro_player_running_stats].run_expected_sum <> te.run_expected_sum
+		OR [bane_pro_player_running_stats].running_yards_sum <> te.running_yards_sum
+		OR [bane_pro_player_running_stats].running_yards_no_2pt_sum <> te.running_yards_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_yards_no_goal_sum <> te.running_yards_no_goal_sum
+		OR [bane_pro_player_running_stats].running_yards_goal_sum <> te.running_yards_goal_sum
+		OR [bane_pro_player_running_stats].running_yards_short_sum <> te.running_yards_short_sum
+		OR [bane_pro_player_running_stats].running_yards_expected_sum <> te.running_yards_expected_sum
+		OR ROUND([bane_pro_player_running_stats].expected_running_yards_sum,1) <> ROUND(te.expected_running_yards_sum,1)
+		OR [bane_pro_player_running_stats].running_yards_after_contact_sum <> te.running_yards_after_contact_sum
+		OR [bane_pro_player_running_stats].running_yards_after_contact_no_2pt_sum <> te.running_yards_after_contact_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_yards_after_contact_no_goal_sum <> te.running_yards_after_contact_no_goal_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_sum <> te.running_tackle_avoided_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_no_2pt_sum <> te.running_tackle_avoided_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_no_goal_sum <> te.running_tackle_avoided_no_goal_sum
+		OR [bane_pro_player_running_stats].running_td_goal_sum <> te.running_td_goal_sum
+		OR [bane_pro_player_running_stats].running_success_short_sum <> te.running_success_short_sum
+		OR ISNULL([bane_pro_player_running_stats].running_yards_adjusted_sum,0) <> ISNULL(te.running_yards_adjusted_sum,0)
+		OR [bane_pro_player_running_stats].running_fumble_sum <> te.running_fumble_sum
+		OR [bane_pro_player_running_stats].running_touchdown_sum <> te.running_touchdown_sum
+		OR [bane_pro_player_running_stats].running_poa_change <> te.running_poa_change
+		OR [bane_pro_player_running_stats].running_poa_change_voluntary <> te.running_poa_change_voluntary
+		OR [bane_pro_player_running_stats].running_poa_change_success <> te.running_poa_change_success
+		OR [bane_pro_player_running_stats].running_poa_change_above_expected <> te.running_poa_change_above_expected
+		OR [bane_pro_player_running_stats].running_epa_attempt_sum <> te.running_epa_attempt_sum
+		OR ABS(ISNULL([bane_pro_player_running_stats].running_epa_sum,0) - ISNULL(te.running_epa_sum,0)) > 0.05
+		OR [bane_pro_player_running_stats].running_success_sum <> te.running_success_sum
+		OR ISNULL([bane_pro_player_running_stats].scrambles,0) <> ISNULL(te.scrambles,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_yards,0) <> ISNULL(te.scrambling_yards,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_tackles_avoided,0) <> ISNULL(te.scrambling_tackles_avoided,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_epa_attempts,0) <> ISNULL(te.scrambling_epa_attempts,0)
+		OR ABS(ISNULL([bane_pro_player_running_stats].scrambling_epa,0) - ISNULL(te.scrambling_epa,0)) > 0.05
+		OR ISNULL([bane_pro_player_running_stats].scrambling_successes,0) <> ISNULL(te.scrambling_successes,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_touchdowns,0) <> ISNULL(te.scrambling_touchdowns,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_fumbles,0) <> ISNULL(te.scrambling_fumbles,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_running_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_running_stats te
+	LEFT JOIN [bane_pro_player_running_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_running_stats]
+	FROM [bane_pro_player_running_stats] ba
+	LEFT JOIN #temp_bane_pro_player_running_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_running_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+	
+	Tackling Stats (as of 08/2016)
+
+    OUTPUT TABLES:            
+		bane_pro_player_tackling_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_tackling_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_tackling_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_tackling_stats
+
+	SELECT pt.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,COUNT(pt.pff_pp_id) AS play_count_sum
+		,SUM(tackle) AS tackle_sum
+		,SUM(assist) AS assist_sum
+		,SUM(tackle_or_assist) AS tackle_assist_sum
+		,SUM(CASE WHEN is_run = 1 THEN tackle_or_assist ELSE 0 END) AS run_tackle_sum
+		,SUM(tackle_4_way_code) AS tackle_4_way_sum
+		,SUM(tackle_probability) AS tackle_probability_sum
+		,SUM(tackle_probability_derrick) AS tackle_probability_derrick_sum
+		,SUM(stop_pff) AS stop_pff_sum
+		,SUM(stop_brv) AS stop_brv_sum
+		,SUM(CASE WHEN is_run = 1 THEN stop_pff ELSE 0 END) AS run_stop_pff_sum
+		,SUM(CASE WHEN is_run = 1 THEN stop_brv ELSE 0 END) AS run_stop_brv_sum
+		,SUM(fumble_forced) AS fumble_forced_sum
+		,SUM(tackle_for_loss) as tackle_for_loss_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_tackling_stats
+	FROM [pro_player_play_tackling_facts] pt
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON pt.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON pt.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON pt.pff_play_id = ty.pff_play_id
+	LEFT JOIN [pro_player_play_penalty_facts] pen --The player penalty table
+		ON pt.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON pt.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR penalty_facemask = 1 OR penalty_horse_collar = 1))
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY pt.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_tackling_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,tackle_sum = te.tackle_sum
+		,assist_sum = te.assist_sum
+		,tackle_assist_sum = te.tackle_assist_sum
+		,run_tackle_sum = te.run_tackle_sum
+		,tackle_4_way_sum = te.tackle_4_way_sum
+		,tackle_probability_sum = te.tackle_probability_sum
+		,tackle_probability_derrick_sum = te.tackle_probability_derrick_sum
+		,stop_pff_sum = te.stop_pff_sum
+		,stop_brv_sum = te.stop_brv_sum
+		,run_stop_pff_sum = te.run_stop_pff_sum
+		,run_stop_brv_sum = te.run_stop_brv_sum
+		,fumble_forced_sum = te.fumble_forced_sum
+		,tackle_for_loss_sum = te.tackle_for_loss_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_tackling_stats te
+	WHERE [bane_pro_player_tackling_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_tackling_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_tackling_stats].play_count_sum <> te.play_count_sum
+		OR [bane_pro_player_tackling_stats].tackle_sum <> te.tackle_sum
+		OR [bane_pro_player_tackling_stats].assist_sum <> te.assist_sum
+		OR [bane_pro_player_tackling_stats].tackle_assist_sum <> te.tackle_assist_sum
+		OR [bane_pro_player_tackling_stats].run_tackle_sum <> te.run_tackle_sum
+		OR [bane_pro_player_tackling_stats].tackle_4_way_sum <> te.tackle_4_way_sum
+		OR ROUND([bane_pro_player_tackling_stats].tackle_probability_sum,1) <> ROUND(te.tackle_probability_sum,1)
+		OR ROUND([bane_pro_player_tackling_stats].tackle_probability_derrick_sum,1) <> ROUND(te.tackle_probability_derrick_sum,1)
+		OR [bane_pro_player_tackling_stats].stop_pff_sum <> te.stop_pff_sum
+		OR [bane_pro_player_tackling_stats].stop_brv_sum <> te.stop_brv_sum
+		OR [bane_pro_player_tackling_stats].run_stop_pff_sum <> te.run_stop_pff_sum
+		OR [bane_pro_player_tackling_stats].run_stop_brv_sum <> te.run_stop_brv_sum
+		OR [bane_pro_player_tackling_stats].fumble_forced_sum <> te.fumble_forced_sum
+		OR [bane_pro_player_tackling_stats].tackle_for_loss_sum <> te.tackle_for_loss_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_tackling_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_tackling_stats te
+	LEFT JOIN [bane_pro_player_tackling_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_tackling_stats]
+	FROM [bane_pro_player_tackling_stats] ba
+	LEFT JOIN #temp_bane_pro_player_tackling_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_tackling_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)
+
+	
+	Passing Stats (as of 11/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_passing_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_passing_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_passing_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_passing_stats
+
+	SELECT ps.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,COUNT(ps.pff_pp_id) AS play_count_sum
+		,SUM(CASE WHEN is_pass = 1 THEN 1 ELSE 0 END) AS pass_play_sum
+		,SUM(quarterback) AS quarterback_sum
+		,SUM(passer) AS passer_sum
+		,SUM(pumpfake) AS pumpfake_sum
+		,SUM(passing_attempt) AS passing_attempt_sum
+		,SUM(passing_attempt_no_throw_aways) AS passing_attempt_no_throw_aways_sum
+		,SUM(passing_attempt_throw) AS passing_attempt_throw_sum
+		,SUM(passing_completion) AS passing_completion_sum
+		,SUM(passing_yards) AS passing_yards_sum
+		,SUM(passing_penalty_yards_drawn) AS passing_penalty_yards_drawn_sum
+		,SUM(passing_drop) AS passing_drop_sum
+		,SUM(passing_drop_yards) AS passing_drop_yards_sum
+		,SUM(passing_air_yards) AS passing_air_yards_sum
+		,SUM(passing_touchdown) AS passing_touchdown_sum
+		,SUM(passing_dropped_touchdown) AS passing_dropped_touchdown_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_interception ELSE 0 END) AS passing_interception_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_dropped_interception ELSE 0 END) AS passing_dropped_interception_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_sack ELSE 0 END) AS passing_sack_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_sack_yards ELSE 0 END) AS passing_sack_yards_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_fumble ELSE 0 END) AS passing_fumble_sum
+		,SUM(CASE WHEN is_no_play = 0 THEN passing_batted_pass ELSE 0 END) AS passing_batted_pass_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN 1 ELSE 0 END) AS passing_catch_probability_attempt_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS passing_catch_probability_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN passing_completion ELSE 0 END) AS passing_catch_probability_completion_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS passing_epa_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability_derrick IS NOT NULL THEN 1 ELSE 0 END) AS passing_catch_probability_derrick_attempt_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 THEN catch_probability_derrick ELSE 0 END) AS passing_catch_probability_derrick_sum
+		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability_derrick IS NOT NULL THEN passing_completion ELSE 0 END) AS passing_catch_probability_derrick_completion_sum
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_passing_stats
+	FROM [pro_player_play_passing_facts] ps
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON ps.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON ps.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON ps.pff_play_id = ty.pff_play_id
+	INNER JOIN [pro_play_passing_facts] pp --The play pass table
+		ON ps.pff_play_id = pp.pff_play_id
+	LEFT JOIN [pro_play_penalty_facts] pen --The play penalty table
+		ON ps.pff_play_id = pen.pff_play_id
+	INNER JOIN [pro_play_result_facts] re --The play results table
+		ON ps.pff_play_id = re.pff_play_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND is_two_point_conversion = 0
+		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1))
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+	GROUP BY ps.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_passing_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,pass_play_sum = te.pass_play_sum
+		,quarterback_sum = te.quarterback_sum
+		,passer_sum = te.passer_sum
+		,pumpfake_sum = te.pumpfake_sum
+		,passing_attempt_sum = te.passing_attempt_sum
+		,passing_attempt_no_throw_aways_sum = te.passing_attempt_no_throw_aways_sum
+		,passing_attempt_throw_sum = te.passing_attempt_throw_sum
+		,passing_completion_sum = te.passing_completion_sum
+		,passing_yards_sum = te.passing_yards_sum
+		,passing_penalty_yards_drawn_sum = te.passing_penalty_yards_drawn_sum
+		,passing_drop_sum = te.passing_drop_sum
+		,passing_drop_yards_sum = te.passing_drop_yards_sum
+		,passing_air_yards_sum = te.passing_air_yards_sum
+		,passing_touchdown_sum = te.passing_touchdown_sum
+		,passing_dropped_touchdown_sum = te.passing_dropped_touchdown_sum
+		,passing_interception_sum = te.passing_interception_sum
+		,passing_dropped_interception_sum = te.passing_dropped_interception_sum
+		,passing_sack_sum = te.passing_sack_sum
+		,passing_sack_yards_sum = te.passing_sack_yards_sum
+		,passing_fumble_sum = te.passing_fumble_sum
+		,passing_batted_pass_sum = te.passing_batted_pass_sum
+		,passing_catch_probability_attempt_sum = te.passing_catch_probability_attempt_sum
+		,passing_catch_probability_sum = te.passing_catch_probability_sum
+		,passing_catch_probability_completion_sum = te.passing_catch_probability_completion_sum
+		,passing_epa_attempt_sum = te.passing_epa_attempt_sum
+		,passing_epa_sum = te.passing_epa_sum
+		,passing_catch_probability_derrick_attempt_sum = te.passing_catch_probability_derrick_attempt_sum
+		,passing_catch_probability_derrick_sum = te.passing_catch_probability_derrick_sum
+		,passing_catch_probability_derrick_completion_sum = te.passing_catch_probability_derrick_completion_sum
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_passing_stats te
+	WHERE [bane_pro_player_passing_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_passing_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_passing_stats].play_count_sum <> te.play_count_sum
+		OR [bane_pro_player_passing_stats].pass_play_sum <> te.pass_play_sum
+		OR [bane_pro_player_passing_stats].quarterback_sum <> te.quarterback_sum
+		OR [bane_pro_player_passing_stats].passer_sum <> te.passer_sum
+		OR [bane_pro_player_passing_stats].pumpfake_sum <> te.pumpfake_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_sum <> te.passing_attempt_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_no_throw_aways_sum <> te.passing_attempt_no_throw_aways_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_throw_sum <> te.passing_attempt_throw_sum
+		OR [bane_pro_player_passing_stats].passing_completion_sum <> te.passing_completion_sum
+		OR [bane_pro_player_passing_stats].passing_yards_sum <> te.passing_yards_sum
+		OR [bane_pro_player_passing_stats].passing_penalty_yards_drawn_sum <> te.passing_penalty_yards_drawn_sum
+		OR [bane_pro_player_passing_stats].passing_drop_sum <> te.passing_drop_sum
+		OR [bane_pro_player_passing_stats].passing_drop_yards_sum <> te.passing_drop_yards_sum
+		OR [bane_pro_player_passing_stats].passing_air_yards_sum <> te.passing_air_yards_sum
+		OR [bane_pro_player_passing_stats].passing_touchdown_sum <> te.passing_touchdown_sum
+		OR [bane_pro_player_passing_stats].passing_dropped_touchdown_sum <> te.passing_dropped_touchdown_sum
+		OR [bane_pro_player_passing_stats].passing_interception_sum <> te.passing_interception_sum
+		OR [bane_pro_player_passing_stats].passing_dropped_interception_sum <> te.passing_dropped_interception_sum
+		OR [bane_pro_player_passing_stats].passing_sack_sum <> te.passing_sack_sum
+		OR [bane_pro_player_passing_stats].passing_sack_yards_sum <> te.passing_sack_yards_sum
+		OR [bane_pro_player_passing_stats].passing_fumble_sum <> te.passing_fumble_sum
+		OR [bane_pro_player_passing_stats].passing_batted_pass_sum <> te.passing_batted_pass_sum
+		OR [bane_pro_player_passing_stats].passing_catch_probability_attempt_sum <> te.passing_catch_probability_attempt_sum
+		OR ROUND([bane_pro_player_passing_stats].passing_catch_probability_sum,1) <> ROUND(te.passing_catch_probability_sum,1)
+		OR [bane_pro_player_passing_stats].passing_catch_probability_completion_sum <> te.passing_catch_probability_completion_sum
+		OR [bane_pro_player_passing_stats].passing_epa_attempt_sum <> te.passing_epa_attempt_sum
+		OR ABS(ISNULL([bane_pro_player_passing_stats].passing_epa_sum,0) - ISNULL(te.passing_epa_sum,0)) > 0.05
+		OR [bane_pro_player_passing_stats].passing_catch_probability_derrick_attempt_sum <> te.passing_catch_probability_derrick_attempt_sum
+		OR ROUND([bane_pro_player_passing_stats].passing_catch_probability_derrick_sum,1) <> ROUND(te.passing_catch_probability_derrick_sum,1)
+		OR [bane_pro_player_passing_stats].passing_catch_probability_derrick_completion_sum <> te.passing_catch_probability_derrick_completion_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_passing_stats]
+	SELECT te.*
+	FROM #temp_bane_pro_player_passing_stats te
+	LEFT JOIN [bane_pro_player_passing_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_passing_stats]
+	FROM [bane_pro_player_passing_stats] ba
+	LEFT JOIN #temp_bane_pro_player_passing_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_passing_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+	
+	Special Teams Stats (as of 09/2021)
+
+    OUTPUT TABLES:            
+		bane_pro_player_special_teams_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_pro_player_special_teams_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_pro_player_special_teams_stats') IS NOT NULL
+		DROP TABLE #temp_bane_pro_player_special_teams_stats
+
+	SELECT st.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,an.season
+		,an.gsis_game_key
+		,COUNT(st.pff_pp_id) AS play_count_sum
+		,SUM(kick_attempt) AS kick_attempts
+		,SUM(kick_made) AS kick_makes
+		,SUM(kick_blocked) AS kick_blocks
+		,SUM(field_goal_attempt) AS field_goal_attempts
+		,SUM(field_goal_made) AS field_goal_makes
+		,SUM(field_goal_blocked) AS field_goal_blocks
+		,SUM(extra_point_attempt) AS extra_point_attempts
+		,SUM(extra_point_made) AS extra_point_makes
+		,SUM(extra_point_blocked) AS extra_point_blocks
+		,SUM(CASE WHEN kick_yards >= 10 AND kick_yards <= 19 THEN kick_attempt ELSE 0 END) AS attempts_0_19
+		,SUM(CASE WHEN kick_yards >= 20 AND kick_yards <= 29 THEN kick_attempt ELSE 0 END) AS attempts_20_29
+		,SUM(CASE WHEN kick_yards >= 30 AND kick_yards <= 39 THEN kick_attempt ELSE 0 END) AS attempts_30_39
+		,SUM(CASE WHEN kick_yards >= 40 AND kick_yards <= 49 THEN kick_attempt ELSE 0 END) AS attempts_40_49
+		,SUM(CASE WHEN kick_yards >= 50 AND kick_yards <= 59 THEN kick_attempt ELSE 0 END) AS attempts_50_59
+		,SUM(CASE WHEN kick_yards >= 60 THEN kick_attempt ELSE 0 END) AS attempts_60_plus
+		,SUM(CASE WHEN kick_yards >= 10 AND kick_yards <= 19 THEN kick_made ELSE 0 END) AS makes_0_19
+		,SUM(CASE WHEN kick_yards >= 20 AND kick_yards <= 29 THEN kick_made ELSE 0 END) AS makes_20_29
+		,SUM(CASE WHEN kick_yards >= 30 AND kick_yards <= 39 THEN kick_made ELSE 0 END) AS makes_30_39
+		,SUM(CASE WHEN kick_yards >= 40 AND kick_yards <= 49 THEN kick_made ELSE 0 END) AS makes_40_49
+		,SUM(CASE WHEN kick_yards >= 50 AND kick_yards <= 59 THEN kick_made ELSE 0 END) AS makes_50_59
+		,SUM(CASE WHEN kick_yards >= 60 THEN kick_made ELSE 0 END) AS makes_60_plus
+		,SUM(punt_attempt) AS punt_attempts
+		,SUM(punt_gross_yards) AS punt_gross_yards_sum
+		,SUM(punt_net_yards) AS punt_net_yards_sum
+		,SUM(punt_inside_20) AS punts_inside_20
+		,SUM(punt_inside_10) AS punts_inside_10
+		,SUM(punt_touchback) AS punt_touchbacks
+		,SUM(punt_fair_catch) AS punt_fair_catches
+		,SUM(punt_return_attempt) AS punt_return_attempt
+		,SUM(punt_return_yards) AS punt_return_yards_sum
+		,SUM(punt_return_fair_catch) AS punt_return_fair_catches
+		,SUM(punt_return_touchdown) AS punt_return_touchdowns
+		,SUM(kickoff_attempt) AS kickoff_attempts
+		,SUM(kickoff_returned) AS kickoffs_returned
+		,SUM(kickoff_touchback) AS kickoff_touchbacks
+		,SUM(kickoff_return_yards_allowed) AS kickoff_return_yards_allowed_sum
+		,SUM(kickoff_return_attempt) AS kickoff_return_attempts
+		,SUM(kickoff_return_yards) AS kickoff_return_yards_sum
+		,SUM(kickoff_return_touchdown) AS kickoff_return_touchdowns
+		,SUM(kickoff_tackle) AS kickoff_tackles
+		,SUM(kickoff_assist) AS kickoff_assists
+		,SUM(kickoff_missed_tackle) AS kickoff_missed_tackles
+		,SUM(punt_tackle) AS punt_tackles
+		,SUM(punt_assist) AS punt_assists
+		,SUM(punt_missed_tackle) AS punt_missed_tackles
+		,GETDATE() AS updated_at
+	INTO #temp_bane_pro_player_special_teams_stats
+	FROM [pro_player_play_special_teams_facts] st
+	INNER JOIN [pro_play_ancillary_facts] an --The play ancillary table
+		ON st.pff_play_id = an.pff_play_id
+	INNER JOIN [pro_play_context_facts] co --The play context table
+		ON st.pff_play_id = co.pff_play_id
+	INNER JOIN [pro_play_type_facts] ty --The play type table
+		ON st.pff_play_id = ty.pff_play_id
+	LEFT JOIN [pro_play_penalty_facts] pen --The play penalty table
+		ON st.pff_play_id = pen.pff_play_id
+	INNER JOIN [pro_play_result_facts] re --The play results table
+		ON st.pff_play_id = re.pff_play_id
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON st.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+	GROUP BY st.nfl_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,an.season
+		,an.gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_pro_player_special_teams_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,kick_attempts = te.kick_attempts
+		,kick_makes = te.kick_makes
+		,kick_blocks = te.kick_blocks
+		,field_goal_attempts = te.field_goal_attempts
+		,field_goal_makes = te.field_goal_makes
+		,field_goal_blocks = te.field_goal_blocks
+		,extra_point_attempts = te.extra_point_attempts
+		,extra_point_makes = te.extra_point_makes
+		,extra_point_blocks = te.extra_point_blocks
+		,attempts_0_19 = te.attempts_0_19
+		,attempts_20_29 = te.attempts_20_29
+		,attempts_30_39 = te.attempts_30_39
+		,attempts_40_49 = te.attempts_40_49
+		,attempts_50_59 = te.attempts_50_59
+		,attempts_60_plus = te.attempts_60_plus
+		,makes_0_19 = te.makes_0_19
+		,makes_20_29 = te.makes_20_29
+		,makes_30_39 = te.makes_30_39
+		,makes_40_49 = te.makes_40_49
+		,makes_50_59 = te.makes_50_59
+		,makes_60_plus = te.makes_60_plus
+		,punt_attempts = te.punt_attempts
+		,punt_gross_yards_sum = te.punt_gross_yards_sum
+		,punt_net_yards_sum = te.punt_net_yards_sum
+		,punts_inside_20 = te.punts_inside_20
+		,punts_inside_10 = te.punts_inside_10
+		,punt_touchbacks = te.punt_touchbacks
+		,punt_fair_catches = te.punt_fair_catches
+		,punt_return_attempt = te.punt_return_attempt
+		,punt_return_yards_sum = te.punt_return_yards_sum
+		,punt_return_fair_catches = te.punt_return_fair_catches
+		,punt_return_touchdowns = te.punt_return_touchdowns
+		,kickoff_attempts = te.kickoff_attempts
+		,kickoffs_returned = te.kickoffs_returned
+		,kickoff_touchbacks = te.kickoff_touchbacks
+		,kickoff_return_yards_allowed_sum = te.kickoff_return_yards_allowed_sum
+		,kickoff_return_attempts = te.kickoff_return_attempts
+		,kickoff_return_yards_sum = te.kickoff_return_yards_sum
+		,kickoff_return_touchdowns = te.kickoff_return_touchdowns
+		,kickoff_tackles = te.kickoff_tackles
+		,kickoff_assists = te.kickoff_assists
+		,kickoff_missed_tackles = te.kickoff_missed_tackles
+		,punt_tackles = te.punt_tackles
+		,punt_assists = te.punt_assists
+		,punt_missed_tackles = te.punt_missed_tackles
+		,updated_at = te.updated_at
+	FROM #temp_bane_pro_player_special_teams_stats te
+	WHERE [bane_pro_player_special_teams_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_special_teams_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_special_teams_stats].play_count_sum <> te.play_count_sum
+		OR [bane_pro_player_special_teams_stats].kick_attempts <> te.kick_attempts
+		OR [bane_pro_player_special_teams_stats].kick_makes <> te.kick_makes
+		OR [bane_pro_player_special_teams_stats].kick_blocks <> te.kick_blocks
+		OR [bane_pro_player_special_teams_stats].field_goal_attempts <> te.field_goal_attempts
+		OR [bane_pro_player_special_teams_stats].field_goal_makes <> te.field_goal_makes
+		OR [bane_pro_player_special_teams_stats].field_goal_blocks <> te.field_goal_blocks
+		OR [bane_pro_player_special_teams_stats].extra_point_attempts <> te.extra_point_attempts
+		OR [bane_pro_player_special_teams_stats].extra_point_makes <> te.extra_point_makes
+		OR [bane_pro_player_special_teams_stats].extra_point_blocks <> te.extra_point_blocks
+		OR [bane_pro_player_special_teams_stats].attempts_0_19 <> te.attempts_0_19
+		OR [bane_pro_player_special_teams_stats].attempts_20_29 <> te.attempts_20_29
+		OR [bane_pro_player_special_teams_stats].attempts_30_39 <> te.attempts_30_39
+		OR [bane_pro_player_special_teams_stats].attempts_40_49 <> te.attempts_40_49
+		OR [bane_pro_player_special_teams_stats].attempts_50_59 <> te.attempts_50_59
+		OR [bane_pro_player_special_teams_stats].attempts_60_plus <> te.attempts_60_plus
+		OR [bane_pro_player_special_teams_stats].makes_0_19 <> te.makes_0_19
+		OR [bane_pro_player_special_teams_stats].makes_20_29 <> te.makes_20_29
+		OR [bane_pro_player_special_teams_stats].makes_30_39 <> te.makes_30_39
+		OR [bane_pro_player_special_teams_stats].makes_40_49 <> te.makes_40_49
+		OR [bane_pro_player_special_teams_stats].makes_50_59 <> te.makes_50_59
+		OR [bane_pro_player_special_teams_stats].makes_60_plus <> te.makes_60_plus
+		OR [bane_pro_player_special_teams_stats].punt_attempts <> te.punt_attempts
+		OR [bane_pro_player_special_teams_stats].punt_gross_yards_sum <> te.punt_gross_yards_sum
+		OR [bane_pro_player_special_teams_stats].punt_net_yards_sum <> te.punt_net_yards_sum
+		OR [bane_pro_player_special_teams_stats].punts_inside_20 <> te.punts_inside_20
+		OR [bane_pro_player_special_teams_stats].punts_inside_10 <> te.punts_inside_10
+		OR [bane_pro_player_special_teams_stats].punt_touchbacks <> te.punt_touchbacks
+		OR [bane_pro_player_special_teams_stats].punt_fair_catches <> te.punt_fair_catches
+		OR [bane_pro_player_special_teams_stats].punt_return_attempt <> te.punt_return_attempt
+		OR [bane_pro_player_special_teams_stats].punt_return_yards_sum <> te.punt_return_yards_sum
+		OR [bane_pro_player_special_teams_stats].punt_return_fair_catches <> te.punt_return_fair_catches
+		OR [bane_pro_player_special_teams_stats].punt_return_touchdowns <> te.punt_return_touchdowns
+		OR [bane_pro_player_special_teams_stats].kickoff_attempts <> te.kickoff_attempts
+		OR [bane_pro_player_special_teams_stats].kickoffs_returned <> te.kickoffs_returned
+		OR [bane_pro_player_special_teams_stats].kickoff_touchbacks <> te.kickoff_touchbacks
+		OR [bane_pro_player_special_teams_stats].kickoff_return_yards_allowed_sum <> te.kickoff_return_yards_allowed_sum
+		OR [bane_pro_player_special_teams_stats].kickoff_return_attempts <> te.kickoff_return_attempts
+		OR [bane_pro_player_special_teams_stats].kickoff_return_yards_sum <> te.kickoff_return_yards_sum
+		OR [bane_pro_player_special_teams_stats].kickoff_return_touchdowns <> te.kickoff_return_touchdowns
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_tackles,0) <> te.kickoff_tackles
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_assists,0) <> te.kickoff_assists
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_missed_tackles,0) <> te.kickoff_missed_tackles
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_tackles,0) <> te.punt_tackles
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_assists,0) <> te.punt_assists
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_missed_tackles,0) <> te.punt_missed_tackles
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_pro_player_special_teams_stats]
+	SELECT te.nfl_player_id
+		,te.player
+		,te.season
+		,te.gsis_game_key
+		,te.play_count_sum
+		,te.kick_attempts
+		,te.kick_makes
+		,te.kick_blocks
+		,te.field_goal_attempts
+		,te.field_goal_makes
+		,te.field_goal_blocks
+		,te.extra_point_attempts
+		,te.extra_point_makes
+		,te.extra_point_blocks
+		,te.attempts_0_19
+		,te.attempts_20_29
+		,te.attempts_30_39
+		,te.attempts_40_49
+		,te.attempts_50_59
+		,te.attempts_60_plus
+		,te.makes_0_19
+		,te.makes_20_29
+		,te.makes_30_39
+		,te.makes_40_49
+		,te.makes_50_59
+		,te.makes_60_plus
+		,te.punt_attempts
+		,te.punt_gross_yards_sum
+		,te.punt_net_yards_sum
+		,te.punts_inside_20
+		,te.punts_inside_10
+		,te.punt_touchbacks
+		,te.punt_fair_catches
+		,te.punt_return_attempt
+		,te.punt_return_yards_sum
+		,te.punt_return_fair_catches
+		,te.punt_return_touchdowns
+		,te.kickoff_attempts
+		,te.kickoffs_returned
+		,te.kickoff_touchbacks
+		,te.kickoff_return_yards_allowed_sum
+		,te.kickoff_return_attempts
+		,te.kickoff_return_yards_sum
+		,te.kickoff_return_touchdowns
+		,te.updated_at
+		,te.kickoff_tackles
+		,te.kickoff_assists
+		,te.kickoff_missed_tackles
+		,te.punt_tackles
+		,te.punt_assists
+		,te.punt_missed_tackles
+	FROM #temp_bane_pro_player_special_teams_stats te
+	LEFT JOIN [bane_pro_player_special_teams_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_pro_player_special_teams_stats]
+	FROM [bane_pro_player_special_teams_stats] ba
+	LEFT JOIN #temp_bane_pro_player_special_teams_stats te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_pro_player_special_teams_stats
+
+
+	
+
+	RETURN @oReturnCD
+		
+END
+
+
+
+
+
+GO
+
+
