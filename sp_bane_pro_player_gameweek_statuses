@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_bane_pro_player_gameweek_statuses_new]    Script Date: 5/11/2022 2:34:11 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_player_gameweek_statuses]    Script Date: 5/11/2022 2:34:54 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -22,8 +22,7 @@ GO
 
 
 
-
-ALTER PROCEDURE [dbo].[sp_bane_pro_player_gameweek_statuses_new] (@iSeason INT) AS
+ALTER PROCEDURE [dbo].[sp_bane_pro_player_gameweek_statuses] (@iSeason INT) AS
 
 
 /*********************************************************************************
@@ -55,11 +54,6 @@ Date        SE		Description
 					years prior
 
 
-_new		CK		Adds a step joining using game week end instead of beginning - check this out to see if we need it and players are
-					falling through the cracks
-
-
-
 **********************************************************************************/
 
 BEGIN 
@@ -83,78 +77,40 @@ BEGIN
 	select * into #temp_players_gameweek_status from [dbo].[bane_pro_player_gameweek_statuses] where 1 = 2
 
 	-- Insert the status records based on the start of the nfl game week
-	INSERT INTO #temp_players_gameweek_status
+	insert  #temp_players_gameweek_status 
 		([nfl_player_id]
-		,[season]
-		,[season_type]
-		,[week]
-		,[nfl_game_week_begin]
-		,[nfl_game_week_end]
-		,[team_week_begin]
-		,[team_week_end]
-		,[status_start_date]
-		,[status_end_date]
-		,[status_roster_simple]
-		,[nfl_club_id])
-	SELECT py.PlayerID as nfl_player_id
-		,wd.season
-		,wd.season_type
-		,wd.[week]
-		,wd.nfl_game_week_begin
-		,wd.nfl_game_week_end
-		,wd.Team_week_begin
-		,wd.team_week_end
-		,tt.[status_start_date] AS status_start_date 
-		,tt.[status_end_date]  AS status_end_date
-		,tt.status_roster_simple
-		,tt.nfl_club_id_result
-	FROM nfl_season_week_dates wd
-	INNER JOIN [pro_player_by_date_statuses] tt 
-		ON (wd.nfl_game_Week_begin BETWEEN status_start_date AND ISNULL(status_end_date, GETDATE()))  
-	INNER JOIN ClubDB.dbo.PlayerExtract py
-		ON py.PlayerID = tt.nfl_player_id
-	WHERE wd.Season = @current_season
-	ORDER BY team_week_end
-
--- Insert the status records based on the end of the nfl game week (just fill in the ones the previous step may have missed)
-	INSERT INTO #temp_players_gameweek_status
-		([nfl_player_id]
-		,[season]
-		,[season_type]
-		,[week]
-		,[nfl_game_week_begin]
-		,[nfl_game_week_end]
-		,[team_week_begin]
-		,[team_week_end]
-		,[status_start_date]
-		,[status_end_date]
-		,[status_roster_simple]
-		,[nfl_club_id])
-	SELECT py.PlayerID as nfl_player_id
-		,wd.season
-		,wd.season_type
-		,wd.[week]
-		,wd.nfl_game_week_begin
-		,wd.nfl_game_week_end
-		,wd.Team_week_begin
-		,wd.team_week_end
-		,tt.[status_start_date] AS status_start_date 
-		,tt.[status_end_date]  AS status_end_date
-		,tt.status_roster_simple
-		,tt.nfl_club_id_result
-	FROM nfl_season_week_dates wd
-	INNER JOIN [pro_player_by_date_statuses] tt 
-		ON (wd.nfl_game_Week_end BETWEEN status_start_date AND ISNULL(status_end_date, GETDATE()))  
-	INNER JOIN ClubDB.dbo.PlayerExtract py 
-		ON py.PlayerID = tt.nfl_player_id
-	LEFT JOIN #temp_players_gameweek_status gs
-		ON tt.nfl_player_id = gs.nfl_player_id
-		AND wd.season = gs.season
-		AND wd.season_type = gs.season_type
-		AND wd.[week] = gs.[week]
-	WHERE wd.Season = @current_season
-		AND gs.nfl_player_id IS NULL
-	ORDER BY team_week_end
+           ,[season]
+           ,[season_type]
+           ,[week]
+           ,[nfl_game_week_begin]
+           ,[nfl_game_week_end]
+           ,[team_week_begin]
+           ,[team_week_end]
+           ,[status_start_date]
+           ,[status_end_date]
+		   ,[status_roster_simple]
+		   ,[nfl_club_id])
+	select 
+		py.PlayerID as nfl_player_id , 
+		wd.season, 
+		wd.season_type, 
+		wd.week, 
+		wd.nfl_game_week_begin , 
+		wd.nfl_game_week_end,  
+		wd.Team_week_begin, 
+		wd.team_week_end, 
+		tt.[status_start_date] as status_start_date, 
+		tt.[status_end_date]  as status_end_date, 
+		tt.status_roster_simple , 
+		tt.nfl_club_id_result
+	from nfl_season_week_dates wd
+	inner join [pro_player_by_date_statuses] tt on
+		(wd.nfl_game_Week_begin between status_start_date and isnull (status_end_date, getdate()))  
+	inner join ClubDB.dbo.PlayerExtract py on 
+		py.PlayerID = tt.nfl_player_id
+	where 
+	wd.Season = @current_season
+	order by team_week_end
 
 /*
 	-- Remove records for players who have been Free Agents since before the transaction delete date
