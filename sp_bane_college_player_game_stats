@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats_20220107]    Script Date: 5/11/2022 12:17:55 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats_20220311]    Script Date: 5/11/2022 12:18:47 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -31,12 +31,7 @@ GO
 
 
 
-
-
-
-
-
-ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats_20220107] (@iSeason INT, @oReturnCD INT OUTPUT) as
+ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats_20220311] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
@@ -45,6 +40,7 @@ Author:			Corey Krawiec
 Creation Date:	10/16/2017
 Description:       
 
+	0) Prep tables
 	1) Blocking Stats
 	2) Run Defense Stats
 	3) Coverage Stats
@@ -54,6 +50,8 @@ Description:
 	7) Tackling Stats
 	8) Passing Stats
 	9) Special Teams Stats
+	10) Penalty Stats
+	11) Additional game playtimes
 
 				
 Input Parameters:
@@ -72,6 +70,38 @@ BEGIN
 
 
 	SET @oReturnCD = 0 
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(0)
+	
+	Create the Cff games table - all the later steps pull from it so that you only get stats for games that aren't in CFF.
+
+	Also create the all star clubs table so you can exclude those games from the NonPro stats.  All Star Games have already been removed from the play level NonPro
+	stats so you don't have to specifically exclude them in that part of those steps in this program - just exclude them from the game level NonPro stats steps.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cff_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_games') IS NOT NULL
+		DROP TABLE #temp_cff_games
+
+	SELECT DISTINCT gsis_game_id
+	INTO #temp_cff_games
+	FROM [CFFUltimate].[dbo].[plays]
+
+
+	-- Check if #temp_all_star_clubs exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_all_star_clubs') IS NOT NULL
+		DROP TABLE #temp_all_star_clubs
+
+	SELECT ClubKey
+	INTO #temp_all_star_clubs
+	FROM NonProDB.dbo.Club cl
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON cl.TeamCode = sc.code
+	WHERE cl.Division = 'other'
 
 	
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -121,8 +151,10 @@ BEGIN
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND pb.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 
@@ -171,7 +203,7 @@ BEGIN
 		ON pb.pff_pp_id = oa.pff_pp_id
 	LEFT JOIN [college_player_play_offense_grade_facts] gof --The player grade table
 		ON pb.pff_pp_id = gof.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON pb.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY pb.gsis_player_id
@@ -212,8 +244,7 @@ BEGIN
 	FROM #temp_bane_college_player_blocking_stats te
 	WHERE [bane_college_player_blocking_stats].gsis_player_id = te.gsis_player_id
 		AND [bane_college_player_blocking_stats].gsis_game_key = te.gsis_game_key
-		AND ([bane_college_player_blocking_stats].season <> te.season
-			OR [bane_college_player_blocking_stats].pass_block_count <> te.pass_block_count
+		AND ([bane_college_player_blocking_stats].pass_block_count <> te.pass_block_count
 			OR [bane_college_player_blocking_stats].run_block_count <> te.run_block_count
 			OR [bane_college_player_blocking_stats].qb_pressure_allowed_sum <> te.qb_pressure_allowed_sum
 			OR [bane_college_player_blocking_stats].qb_sack_allowed_sum <> te.qb_sack_allowed_sum
@@ -304,8 +335,10 @@ BEGIN
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
 		AND is_run = 1
+		AND is_two_point_conversion = 0
 		AND pg.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 	-- Check if #temp_bane_college_player_run_defense_stats exists, if it does drop it
@@ -342,7 +375,7 @@ BEGIN
 		ON pg.pff_pp_id = ta.pff_pp_id
 	INNER JOIN [college_player_play_defense_alignment_facts] da --The player position table
 		ON pg.pff_pp_id = da.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON pg.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY pg.gsis_player_id
@@ -374,7 +407,7 @@ BEGIN
 		AND ([bane_college_player_run_defense_stats].run_defense_count <> te.run_defense_count
 		OR [bane_college_player_run_defense_stats].rush_yards_allowed_sum <> te.rush_yards_allowed_sum
 		OR ROUND([bane_college_player_run_defense_stats].rush_yards_allowed_adjusted_sum,1) <> ROUND(te.rush_yards_allowed_adjusted_sum,1)  
-		OR [bane_college_player_run_defense_stats].expected_rush_yards_allowed_sum <> te.expected_rush_yards_allowed_sum
+		OR ISNULL(ROUND([bane_college_player_run_defense_stats].expected_rush_yards_allowed_sum,1),0) <> ISNULL(ROUND(te.expected_rush_yards_allowed_sum,1),0)
 		OR [bane_college_player_run_defense_stats].rush_below_expected_allowed_sum <> te.rush_below_expected_allowed_sum 
 		OR [bane_college_player_run_defense_stats].rush_below_expected_allowed_adjusted_sum <> te.rush_below_expected_allowed_adjusted_sum
 		OR [bane_college_player_run_defense_stats].run_defense_win_sum <> te.run_defense_win_sum
@@ -462,8 +495,10 @@ BEGIN
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND ppas.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 	-- Check if #temp_bane_college_player_coverage_stats exists, if it does drop it
@@ -519,7 +554,7 @@ BEGIN
 		ON ppas.pff_play_id = pa.pff_play_id
 	INNER JOIN [college_player_play_defense_alignment_facts] pd --The player position table
 		ON ppas.pff_pp_id = pd.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON ppas.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY ppas.gsis_player_id
@@ -530,6 +565,169 @@ BEGIN
 
 	DROP TABLE #temp_plays_player_coverage_college
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_ints exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_ints') IS NOT NULL
+		DROP TABLE #temp_non_pro_ints
+
+	SELECT DISTINCT GameKey
+		,PlayID
+		,PlayerID
+	INTO #temp_non_pro_ints
+	FROM daily_build_non_pro_play_stats
+	WHERE stat_name IN ('Interception Yards','Interception Yards, TD')
+
+
+	-- Check if #temp_non_pro_player_play_coverage_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_coverage_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_coverage_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Defensed') AND ii.PlayerID IS NULL THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS pass_break_up_brv_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Defensed') AND ii.PlayerID IS NULL THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS pass_break_up_pff_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Interception Yards','Interception Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS interception_sum 
+	INTO #temp_non_pro_player_play_coverage_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_non_pro_ints ii
+		ON ps.GameKey = ii.GameKey
+		AND ps.PlayID = ii.PlayID
+		AND ps.PlayerID = ii.PlayerID
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('Pass Defensed') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Interception Yards','Interception Yards, TD') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_coverage_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_pass_sum
+		,NULL AS play_count_press_sum
+		,NULL AS targeted_defender_primary_sum
+		,NULL AS targeted_defender_secondary_sum
+		,NULL AS targeted_defender_sum
+		,NULL AS responsible_for_coverage_safety_sum
+		,NULL AS completion_allowed_sum
+		,NULL AS completion_yards_allowed_sum
+		,NULL AS completion_allowed_brv_sum
+		,NULL AS completion_yards_allowed_brv_sum
+		,SUM(pass_break_up_brv_sum) AS pass_break_up_brv_sum
+		,SUM(pass_break_up_pff_sum) AS pass_break_up_pff_sum
+		,NULL AS pass_break_up_play_on_ball_sum 
+		,SUM(interception_sum) AS interception_sum 
+		,NULL AS pass_break_up_weighted_sum
+		,NULL AS yards_after_catch_above_expected_sum  
+		,NULL AS yards_after_catch_opportunity_sum
+		,NULL AS penalty_defensive_pass_interference_sum
+		,NULL AS penalty_defensive_holding_sum
+		,NULL AS team_receiving_yards_allowed_on
+		,NULL AS team_rushing_yards_allowed_on
+		,NULL AS team_touchdowns_allowed_on
+		,NULL AS expected_points_allowed_pff_sum
+		,GETDATE() AS updated_at
+	FROM #temp_non_pro_player_play_coverage_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	Do this second so you only fill it in for games that don't appear in the play level NonPro Stats.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO #temp_bane_college_player_coverage_stats
+	SELECT DISTINCT de.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_pass_sum
+		,NULL AS play_count_press_sum
+		,NULL AS targeted_defender_primary_sum
+		,NULL AS targeted_defender_secondary_sum
+		,NULL AS targeted_defender_sum
+		,NULL AS responsible_for_coverage_safety_sum
+		,NULL AS completion_allowed_sum
+		,NULL AS completion_yards_allowed_sum
+		,NULL AS completion_allowed_brv_sum
+		,NULL AS completion_yards_allowed_brv_sum
+		,(PassDefences) AS pass_break_up_brv_sum
+		,(PassDefences) AS pass_break_up_pff_sum
+		,NULL AS pass_break_up_play_on_ball_sum 
+		,(Interceptions) AS interception_sum 
+		,NULL AS pass_break_up_weighted_sum
+		,NULL AS yards_after_catch_above_expected_sum  
+		,NULL AS yards_after_catch_opportunity_sum
+		,NULL AS penalty_defensive_pass_interference_sum
+		,NULL AS penalty_defensive_holding_sum
+		,NULL AS team_receiving_yards_allowed_on
+		,NULL AS team_rushing_yards_allowed_on
+		,NULL AS team_touchdowns_allowed_on
+		,NULL AS expected_points_allowed_pff_sum
+		,GETDATE() AS updated_at
+	FROM NonProDB.dbo.Defensive de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_coverage_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND (de.PassDefences > 0 OR de.Interceptions > 0)
+		AND ac.ClubKey IS NULL
+
+
+	DROP TABLE #temp_non_pro_player_play_coverage_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)(c)
+
+	
+	Update/add to/delete from the Bane coverage table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 --Update any rows that have changed
 	UPDATE [bane_college_player_coverage_stats]
@@ -687,7 +885,7 @@ BEGIN
 		ON pr.pff_pp_id = pen.pff_pp_id
 	INNER JOIN [college_player_play_defense_alignment_facts] pd --The player play alignment table
 		ON pr.pff_pp_id = pd.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON pr.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	 WHERE 1 = 1
@@ -701,14 +899,152 @@ BEGIN
 		--AND (unblocked = 0 OR unblocked IS NULL)
 		--AND (clean_up_pressure = 0 OR clean_up_pressure IS NULL)
 		--AND (pursuit_pressure = 0 OR pursuit_pressure IS NULL)
+		AND is_two_point_conversion = 0
 		AND pr.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 	GROUP BY pr.gsis_player_id
 		,CONCAT(last_name,', ',goes_by)
 		,an.season
 		,an.gsis_game_key
 
 
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_sacks exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_sacks') IS NOT NULL
+		DROP TABLE #temp_non_pro_sacks
+
+	SELECT DISTINCT GameKey
+		,PlayID
+		,PlayerID
+	INTO #temp_non_pro_sacks
+	FROM daily_build_non_pro_play_stats
+	WHERE stat_name IN ('1/2 Sack Yards (Defense)','Sack Yards (Defense)')
+
+
+	-- Check if #temp_non_pro_player_play_pass_rush_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_pass_rush_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_pass_rush_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('1/2 Sack Yards (Defense)','Sack Yards (Defense)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS qb_sack_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Quarterback Hit') AND sa.PlayerID IS NULL THEN 1 ELSE 0 END)  >= 1 THEN 1 ELSE 0 END AS qb_hit_sum
+	INTO #temp_non_pro_player_play_pass_rush_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_non_pro_sacks sa
+		ON ps.GameKey = sa.GameKey
+		AND ps.PlayID = sa.PlayID
+		AND ps.PlayerID = sa.PlayerID
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('1/2 Sack Yards (Defense)','Sack Yards (Defense)') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Quarterback Hit') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_pass_rush_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_pass_sum
+		,NULL AS drawn_offensive_holding_sum
+		,NULL AS qb_pressure_sum
+		,SUM(qb_sack_sum) AS qb_sack_sum
+		,SUM(qb_hit_sum) AS qb_hit_sum
+		,NULL AS qb_hurry_sum
+		,NULL AS batted_pass_sum
+		,NULL AS qb_disruption_sum
+		,NULL AS qb_disruption_no_batted_pass_sum
+		,NULL AS qb_disruption_weight_pff_sum
+		,NULL AS qb_disruption_weight_4_sum
+		,GETDATE() AS updated_at
+	FROM #temp_non_pro_player_play_pass_rush_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO #temp_bane_college_player_pass_rush_stats
+	SELECT DISTINCT de.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_pass_sum
+		,NULL AS drawn_offensive_holding_sum
+		,NULL AS qb_pressure_sum
+		,CEILING(Sacks) AS qb_sack_sum
+		,CEILING(QuarterbackHits) AS qb_hit_sum
+		,NULL AS qb_hurry_sum
+		,NULL AS batted_pass_sum
+		,NULL AS qb_disruption_sum
+		,NULL AS qb_disruption_no_batted_pass_sum
+		,NULL AS qb_disruption_weight_pff_sum
+		,NULL AS qb_disruption_weight_4_sum
+		,GETDATE() AS updated_at
+	FROM NonProDB.dbo.Defensive de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_pass_rush_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND (de.Sacks > 0 OR de.QuarterbackHits > 0)
+		AND ac.ClubKey IS NULL
+
+
+	DROP TABLE #temp_non_pro_player_play_pass_rush_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)(c)
+
+	
+	Update/add to/delete from the Bane pass rush table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
 --Update any rows that have changed
 	UPDATE [bane_college_player_pass_rush_stats]
 	SET player = te.player
@@ -824,8 +1160,10 @@ BEGIN
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND rec.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 	-- Check if #temp_bane_college_player_receiving_stats exists, if it does drop it
@@ -872,7 +1210,7 @@ BEGIN
 		ON rec.pff_pp_id = pen.pff_pp_id
 	INNER JOIN [college_player_play_offense_alignment_facts] oa --The player position table
 		ON rec.pff_pp_id = oa.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON rec.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY rec.gsis_player_id
@@ -883,6 +1221,157 @@ BEGIN
 
 	DROP TABLE #temp_player_receiving_college
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_player_play_receiving_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_receiving_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_receiving_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Target') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS target_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Reception Yards','Pass Reception Yards, TD') THEN 1 ELSE 0 END)  >= 1 THEN 1 ELSE 0 END AS reception_sum
+		,MAX(CASE WHEN stat_name IN ('Pass Reception Yards','Pass Reception Yards, TD') THEN Yards ELSE 0 END) AS receiving_yards_sum
+		,MAX(CASE WHEN stat_name IN ('Yardage Gained After the Catch') AND category_name IN ('Pass Receiving') AND bad_pass_length_flag = 0 THEN Yards ELSE 0 END) AS receiving_yards_after_catch_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Reception Yards','Pass Reception Yards, TD') AND fumble_play = 1 THEN 1 ELSE 0 END)  >= 1 THEN 1 ELSE 0 END AS receiving_fumble
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Reception Yards, TD') THEN 1 ELSE 0 END)  >= 1 THEN 1 ELSE 0 END AS receiving_touchdown_sum
+		--,SUM(CASE WHEN stat_name IN ('Pass Target') THEN air_yards ELSE 0 END) AS receiving_air_yards_sum
+	INTO #temp_non_pro_player_play_receiving_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('Pass Target') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Pass Reception Yards') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Yardage Gained After the Catch') AND category_name IN ('Pass Receiving') THEN Yards ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Pass Reception Yards') AND fumble_play = 1 THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Pass Reception Yards, TD') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_receiving_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_route_sum
+		,NULL AS play_count_pressed_sum
+		,CASE WHEN SUM(reception_sum) > SUM(target_sum) THEN SUM(reception_sum) ELSE SUM(target_sum) END AS target_sum
+		,NULL AS catchable_target_sum
+		,NULL AS drop_sum
+		,SUM(reception_sum) AS reception_sum
+		,SUM(receiving_yards_sum) AS receiving_yards_sum
+		,SUM(receiving_yards_after_catch_sum) AS receiving_yards_after_catch_sum
+		,NULL AS receiving_yards_after_contact_sum
+		,SUM(receiving_fumble) AS receiving_fumble
+		,SUM(receiving_touchdown_sum) AS receiving_touchdown_sum
+		,NULL AS receiving_tackle_avoided_sum
+		,NULL AS receiving_interception_sum
+		,NULL AS receiving_yards_adjusted_sum
+		,NULL AS receiving_yards_adjusted_with_int_sum
+		,NULL AS penalty_yards_drawn_sum
+		,NULL AS catch_probability_target_sum
+		,NULL AS catch_probability_sum
+		,NULL AS receiving_epa_target_sum
+		,NULL AS receiving_epa_sum
+		,NULL AS receiving_air_yards_sum
+		,NULL AS catch_probability_derrick_target_sum
+		,NULL AS catch_probability_derrick_sum
+		,GETDATE() AS updated_at
+	FROM #temp_non_pro_player_play_receiving_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO #temp_bane_college_player_receiving_stats
+	SELECT de.PlayerID AS gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_route_sum
+		,NULL AS play_count_pressed_sum
+		,CASE WHEN (Receptions) > (PassTarget) THEN (Receptions) ELSE (PassTarget) END AS target_sum
+		,NULL AS catchable_target_sum
+		,NULL AS drop_sum
+		,(Receptions) AS reception_sum
+		,(Yards) AS receiving_yards_sum
+		,(YardsAfterCatch) AS receiving_yards_after_catch_sum
+		,NULL AS receiving_yards_after_contact_sum
+		,NULL AS receiving_fumble
+		,(Touchdowns) AS receiving_touchdown_sum
+		,NULL AS receiving_tackle_avoided_sum
+		,NULL AS receiving_interception_sum
+		,NULL AS receiving_yards_adjusted_sum
+		,NULL AS receiving_yards_adjusted_with_int_sum
+		,NULL AS penalty_yards_drawn_sum
+		,NULL AS catch_probability_target_sum
+		,NULL AS catch_probability_sum
+		,NULL AS receiving_epa_target_sum
+		,NULL AS receiving_epa_sum
+		,NULL AS receiving_air_yards_sum
+		,NULL AS catch_probability_derrick_target_sum
+		,NULL AS catch_probability_derrick_sum
+		,GETDATE() AS updated_at
+	FROM NonProDB.dbo.Receiving de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_receiving_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+	DROP TABLE #temp_non_pro_player_play_receiving_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)(c)
+
+	
+	Update/add to/delete from the Bane receiving table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 --Update any rows that have changed
 	UPDATE [bane_college_player_receiving_stats]
@@ -1026,8 +1515,10 @@ BEGIN
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND run.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 	-- Check if #temp_bane_college_player_running_stats exists, if it does drop it
@@ -1085,7 +1576,7 @@ BEGIN
 		ON run.pff_pp_id = pen.pff_pp_id
 	INNER JOIN [college_player_play_offense_alignment_facts] oa --The player position table
 		ON run.pff_pp_id = oa.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON run.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY run.gsis_player_id
@@ -1097,6 +1588,195 @@ BEGIN
 	DROP TABLE #temp_player_running_college
 
 
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_player_play_running_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_running_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_running_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS run_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND is_two_point_conversion = 0 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS run_no_2pt_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND AbsoluteYardLine >= 5 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS run_no_goal_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND AbsoluteYardLine < 5 AND YardsToGo <= AbsoluteYardLine THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS run_goal_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND YardsToGo <= 3 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS run_short_sum
+		,MAX(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') THEN Yards ELSE 0 END) AS running_yards_sum
+		,MAX(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND is_two_point_conversion = 0 THEN Yards ELSE 0 END) AS running_yards_no_2pt_sum
+		,MAX(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND AbsoluteYardLine >= 5 THEN Yards ELSE 0 END) AS running_yards_no_goal_sum
+		,MAX(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND AbsoluteYardLine < 5 AND YardsToGo <= AbsoluteYardLine THEN Yards ELSE 0 END) AS running_yards_goal_sum
+		,MAX(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') AND YardsToGo <= 3 THEN Yards ELSE 0 END) AS running_yards_short_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards, TD') AND AbsoluteYardLine < 5 AND YardsToGo <= AbsoluteYardLine THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS running_td_goal_sum
+		--,NULL AS running_success_short_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus') AND fumble_play = 1 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS running_fumble_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Rushing Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS running_touchdown_sum
+		--,NULL AS running_success_sum
+	INTO #temp_non_pro_player_play_running_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_running_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_run_sum
+		,SUM(run_sum) AS run_sum
+		,SUM(run_no_2pt_sum) AS run_no_2pt_sum
+		,SUM(run_no_goal_sum) AS run_no_goal_sum
+		,SUM(run_goal_sum) AS run_goal_sum
+		,SUM(run_short_sum) AS run_short_sum
+		,NULL AS run_expected_sum
+		,SUM(running_yards_sum) AS running_yards_sum
+		,SUM(running_yards_no_2pt_sum) AS running_yards_no_2pt_sum
+		,SUM(running_yards_no_goal_sum) AS running_yards_no_goal_sum
+		,SUM(running_yards_goal_sum) AS running_yards_goal_sum
+		,SUM(running_yards_short_sum) AS running_yards_short_sum
+		,NULL AS running_yards_expected_sum
+		,NULL AS expected_running_yards_sum
+		,NULL AS running_yards_after_contact_sum
+		,NULL AS running_yards_after_contact_no_2pt_sum
+		,NULL AS running_yards_after_contact_no_goal_sum
+		,NULL AS running_tackle_avoided_sum
+		,NULL AS running_tackle_avoided_no_2pt_sum
+		,NULL AS running_tackle_avoided_no_goal_sum
+		,SUM(running_td_goal_sum) AS running_td_goal_sum
+		,NULL AS running_success_short_sum
+		,NULL AS running_yards_adjusted_sum
+		,SUM(running_fumble_sum) AS running_fumble_sum
+		,SUM(running_touchdown_sum) AS running_touchdown_sum
+		,NULL AS running_poa_change
+		,NULL AS running_poa_change_voluntary
+		,NULL AS running_poa_change_success
+		,NULL AS running_poa_change_above_expected
+		,NULL AS running_epa_attempt_sum
+		,NULL AS running_epa_sum
+		,NULL AS running_success_sum
+		,GETDATE() AS updated_at
+		,NULL AS scrambles
+		,NULL AS scrambling_yards
+		,NULL AS scrambling_tackles_avoided
+		,NULL AS scrambling_epa_attempts
+		,NULL AS scrambling_epa
+		,NULL AS scrambling_successes
+		,NULL AS scrambling_touchdowns
+		,NULL AS scrambling_fumbles
+	FROM #temp_non_pro_player_play_running_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO #temp_bane_college_player_running_stats
+	SELECT de.PlayerID AS gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_run_sum
+		,(Attempts) AS run_sum
+		,NULL AS run_no_2pt_sum
+		,NULL AS run_no_goal_sum
+		,NULL AS run_goal_sum
+		,NULL AS run_short_sum
+		,NULL AS run_expected_sum
+		,(Yards) AS running_yards_sum
+		,NULL AS running_yards_no_2pt_sum
+		,NULL AS running_yards_no_goal_sum
+		,NULL AS running_yards_goal_sum
+		,NULL AS running_yards_short_sum
+		,NULL AS running_yards_expected_sum
+		,NULL AS expected_running_yards_sum
+		,NULL AS running_yards_after_contact_sum
+		,NULL AS running_yards_after_contact_no_2pt_sum
+		,NULL AS running_yards_after_contact_no_goal_sum
+		,NULL AS running_tackle_avoided_sum
+		,NULL AS running_tackle_avoided_no_2pt_sum
+		,NULL AS running_tackle_avoided_no_goal_sum
+		,NULL AS running_td_goal_sum
+		,NULL AS running_success_short_sum
+		,NULL AS running_yards_adjusted_sum
+		,NULL AS running_fumble_sum
+		,(Touchdowns) AS running_touchdown_sum
+		,NULL AS running_poa_change
+		,NULL AS running_poa_change_voluntary
+		,NULL AS running_poa_change_success
+		,NULL AS running_poa_change_above_expected
+		,NULL AS running_epa_attempt_sum
+		,NULL AS running_epa_sum
+		,NULL AS running_success_sum
+		,GETDATE() AS updated_at
+		,NULL AS scrambles
+		,NULL AS scrambling_yards
+		,NULL AS scrambling_tackles_avoided
+		,NULL AS scrambling_epa_attempts
+		,NULL AS scrambling_epa
+		,NULL AS scrambling_successes
+		,NULL AS scrambling_touchdowns
+		,NULL AS scrambling_fumbles
+	FROM NonProDB.dbo.Rushing de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_running_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+	DROP TABLE #temp_non_pro_player_play_running_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)(c)
+
+	
+	Update/add to/delete from the Bane running table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
 --Update any rows that have changed
 	UPDATE [bane_college_player_running_stats]
 	SET player = te.player
@@ -1244,8 +1924,10 @@ BEGIN
 		,SUM(CASE WHEN is_run = 1 THEN stop_pff ELSE 0 END) AS run_stop_pff_sum
 		,SUM(CASE WHEN is_run = 1 THEN stop_brv ELSE 0 END) AS run_stop_brv_sum
 		,SUM(fumble_forced) AS fumble_forced_sum
-		,SUM(tackle_for_loss) as tackle_for_loss_sum
+		,SUM(tackle_for_loss) AS tackle_for_loss_sum
 		,GETDATE() AS updated_at
+		,SUM(touchdown) AS defensive_touchdowns
+		,SUM(missed_tackle) AS missed_tackles
 	INTO #temp_bane_college_player_tackling_stats
 	FROM [college_player_play_tackling_facts] pt
 	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
@@ -1256,7 +1938,7 @@ BEGIN
 		ON pt.pff_play_id = ty.pff_play_id
 	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pt.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON pt.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	WHERE 1 = 1
@@ -1266,13 +1948,186 @@ BEGIN
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND pt.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 	GROUP BY pt.gsis_player_id
 		,CONCAT(last_name,', ',goes_by)
 		,an.season
 		,an.gsis_game_key
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_non_pro_player_play_tackling_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_tackling_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_tackling_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN SpecialTeamsPlay = 0 AND STPlayType = 0 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS tackle_sum
+		,CASE WHEN SUM(CASE WHEN SpecialTeamsPlay = 0 AND STPlayType = 0 AND stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS assist_sum
+		,CASE WHEN SUM(CASE WHEN SpecialTeamsPlay = 0 AND STPlayType = 0 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss','Tackle Assist') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS tackle_assist_sum
+		,CASE WHEN SUM(CASE WHEN SpecialTeamsPlay = 0 AND STPlayType = 0 AND stat_name IN ('Fumble - Forced') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS fumble_forced_sum
+		,CASE WHEN SUM(CASE WHEN SpecialTeamsPlay = 0 AND STPlayType = 0 AND stat_name IN ('1/2 Tackle for a Loss','Tackle for a Loss') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS tackle_for_loss_sum
+	INTO #temp_non_pro_player_play_tackling_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Fumble - Forced') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_tackling_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_sum
+		,SUM(tackle_sum)AS tackle_sum
+		,SUM(assist_sum) AS assist_sum
+		,SUM(tackle_assist_sum) AS tackle_assist_sum
+		,NULL AS run_tackle_sum
+		,NULL AS tackle_4_way_sum
+		,NULL AS tackle_probability_sum
+		,NULL AS tackle_probability_derrick_sum
+		,NULL AS stop_pff_sum
+		,NULL AS stop_brv_sum
+		,NULL AS run_stop_pff_sum
+		,NULL AS run_stop_brv_sum
+		,SUM(fumble_forced_sum) AS fumble_forced_sum
+		,SUM(tackle_for_loss_sum) AS tackle_for_loss_sum
+		,GETDATE() AS updated_at
+		,NULL AS defensive_touchdowns
+		,NULL AS missed_tackles
+	FROM #temp_non_pro_player_play_tackling_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO #temp_bane_college_player_tackling_stats
+	SELECT de.PlayerID AS gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_sum
+		,(Tackles) AS tackle_sum
+		,(Assists) AS assist_sum
+		,(Tackles + Assists) AS tackle_assist_sum
+		,NULL AS run_tackle_sum
+		,NULL AS tackle_4_way_sum
+		,NULL AS tackle_probability_sum
+		,NULL AS tackle_probability_derrick_sum
+		,NULL AS stop_pff_sum
+		,NULL AS stop_brv_sum
+		,NULL AS run_stop_pff_sum
+		,NULL AS run_stop_brv_sum
+		,(ForcedFumbles) AS fumble_forced_sum
+		,(TacklesForALoss) AS tackle_for_loss_sum
+		,GETDATE() AS updated_at
+		,NULL AS defensive_touchdowns
+		,NULL AS missed_tackles
+	FROM NonProDB.dbo.Defensive de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_tackling_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+-- Check if #temp_non_pro_player_defensive_tds_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_defensive_tds_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_defensive_tds_stats
+
+	SELECT de.PlayerID AS gsis_player_id
+		,de.GameKey AS gsis_game_key
+		,SUM(CASE WHEN ReturnType IN (1,4) THEN Touchdowns ELSE 0 END) AS defensive_touchdowns
+	INTO #temp_non_pro_player_defensive_tds_stats
+	FROM NonProDB.dbo.[Returns] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+	GROUP BY de.PlayerID
+		,de.GameKey
+	HAVING SUM(CASE WHEN ReturnType IN (1,4) THEN Touchdowns ELSE 0 END) > 0
+
+
+	-- Update the college_play_passing_facts table with catch probability
+	UPDATE #temp_bane_college_player_tackling_stats
+		SET defensive_touchdowns  = dt.defensive_touchdowns
+	FROM #temp_non_pro_player_defensive_tds_stats dt
+	WHERE #temp_bane_college_player_tackling_stats.gsis_game_key = dt.gsis_game_key
+		AND #temp_bane_college_player_tackling_stats.gsis_player_id = dt.gsis_player_id
+
+	
+	DROP TABLE #temp_non_pro_player_play_tackling_stats
+	DROP TABLE #temp_non_pro_player_defensive_tds_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)(c)
+
+	
+	Update/add to/delete from the Bane tackling table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 --Update any rows that have changed
 	UPDATE [bane_college_player_tackling_stats]
@@ -1293,6 +2148,8 @@ BEGIN
 		,fumble_forced_sum = te.fumble_forced_sum
 		,tackle_for_loss_sum = te.tackle_for_loss_sum
 		,updated_at = te.updated_at
+		,defensive_touchdowns = te.defensive_touchdowns
+		,missed_tackles = te.missed_tackles
 	FROM #temp_bane_college_player_tackling_stats te
 	WHERE [bane_college_player_tackling_stats].gsis_player_id = te.gsis_player_id
 		AND [bane_college_player_tackling_stats].gsis_game_key = te.gsis_game_key
@@ -1310,6 +2167,8 @@ BEGIN
 		OR [bane_college_player_tackling_stats].run_stop_brv_sum <> te.run_stop_brv_sum
 		OR [bane_college_player_tackling_stats].fumble_forced_sum <> te.fumble_forced_sum
 		OR [bane_college_player_tackling_stats].tackle_for_loss_sum <> te.tackle_for_loss_sum
+		OR ISNULL([bane_college_player_tackling_stats].defensive_touchdowns,0) <> ISNULL(te.defensive_touchdowns,0)
+		OR ISNULL([bane_college_player_tackling_stats].missed_tackles,0) <> ISNULL(te.missed_tackles,0)
 		)
 
 
@@ -1392,13 +2251,14 @@ BEGIN
 	WHERE 1 = 1
 		AND season >= @iSeason
 		AND is_no_play = 0
-		--AND is_two_point_conversion = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1))
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
 		AND ps.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
 
 
 	-- Check if #temp_bane_college_player_passing_stats exists, if it does drop it
@@ -1422,7 +2282,7 @@ BEGIN
 		,SUM(passing_penalty_yards_drawn) AS passing_penalty_yards_drawn_sum
 		,SUM(passing_drop) AS passing_drop_sum
 		,SUM(passing_drop_yards) AS passing_drop_yards_sum
-		,SUM(passing_air_yards) AS passing_air_yards_sum
+		,SUM(CASE WHEN passing_completion = 1 THEN passing_air_yards ELSE 0 END) AS passing_air_yards_sum
 		,SUM(passing_touchdown) AS passing_touchdown_sum
 		,SUM(passing_dropped_touchdown) AS passing_dropped_touchdown_sum
 		,SUM(CASE WHEN is_no_play = 0 THEN passing_interception ELSE 0 END) AS passing_interception_sum
@@ -1449,7 +2309,7 @@ BEGIN
 		ON ps.pff_play_id = re.pff_play_id
 	INNER JOIN [college_play_passing_facts] pp --The play pass table
 		ON ps.pff_play_id = pp.pff_play_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON ps.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	GROUP BY ps.gsis_player_id
@@ -1460,6 +2320,169 @@ BEGIN
 
 	DROP TABLE #temp_player_passing_college
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_player_play_passing_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_passing_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_passing_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Pass Incomplete','Interception (by Passer)','Passing Yards','Passing Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS passing_attempt_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Passing Yards','Passing Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS passing_completion_sum
+		,MAX(CASE WHEN stat_name IN ('Passing Yards','Passing Yards, TD') THEN Yards ELSE 0 END) AS passing_yards_sum
+		--,MAX(CASE WHEN stat_name IN ('Pass Incomplete','Interception (by Passer)','Passing Yards','Passing Yards, TD') THEN air_yards ELSE NULL END) AS passing_air_yards_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Passing Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS passing_touchdown_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Interception (by Passer)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS passing_interception_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Sack Yards (Offense)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS passing_sack_sum
+		,MIN(CASE WHEN stat_name IN ('Sack Yards (Offense)') THEN Yards * (CASE WHEN Yards > 0 THEN -1 ELSE 1 END) ELSE 0 END) AS passing_sack_yards_sum
+	INTO #temp_non_pro_player_play_passing_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('Pass Incomplete','Interception (by Passer)','Passing Yards','Passing Yards, TD') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Sack Yards (Offense)') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT #temp_bane_college_player_passing_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_sum
+		,NULL AS pass_play_sum
+		,NULL AS quarterback_sum
+		,NULL AS passer_sum
+		,NULL AS pumpfake_sum
+		,SUM(passing_attempt_sum) AS passing_attempt_sum
+		,NULL AS passing_attempt_no_throw_aways_sum
+		,NULL AS passing_attempt_throw_sum
+		,SUM(passing_completion_sum) AS passing_completion_sum
+		,SUM(passing_yards_sum) AS passing_yards_sum
+		,NULL AS passing_penalty_yards_drawn_sum
+		,NULL AS passing_drop_sum
+		,NULL AS passing_drop_yards_sum
+		,NULL AS passing_air_yards_sum
+		,SUM(passing_touchdown_sum) AS passing_touchdown_sum
+		,NULL AS passing_dropped_touchdown_sum
+		,SUM(passing_interception_sum) AS passing_interception_sum
+		,NULL AS passing_dropped_interception_sum
+		,SUM(passing_sack_sum) AS passing_sack_sum
+		,SUM(passing_sack_yards_sum) AS passing_sack_yards_sum
+		,NULL AS passing_fumble_sum
+		,NULL AS passing_batted_pass_sum
+		,NULL AS passing_catch_probability_attempt_sum
+		,NULL AS passing_catch_probability_sum
+		,NULL AS passing_catch_probability_completion_sum
+		,NULL AS passing_epa_attempt_sum
+		,NULL AS passing_epa_sum
+		,NULL AS passing_catch_probability_derrick_attempt_sum
+		,NULL AS passing_catch_probability_derrick_sum
+		,NULL AS passing_catch_probability_derrick_completion_sum
+		,GETDATE() AS updated_at
+	FROM #temp_non_pro_player_play_passing_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT #temp_bane_college_player_passing_stats
+	SELECT de.PlayerID AS gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS play_count_sum
+		,NULL AS pass_play_sum
+		,NULL AS quarterback_sum
+		,NULL AS passer_sum
+		,NULL AS pumpfake_sum
+		,(Attempts) AS passing_attempt_sum
+		,NULL AS passing_attempt_no_throw_aways_sum
+		,NULL AS passing_attempt_throw_sum
+		,(Completions) AS passing_completion_sum
+		,(Yards) AS passing_yards_sum
+		,NULL AS passing_penalty_yards_drawn_sum
+		,NULL AS passing_drop_sum
+		,NULL AS passing_drop_yards_sum
+		,NULL AS passing_air_yards_sum
+		,(Touchdowns) AS passing_touchdown_sum
+		,NULL AS passing_dropped_touchdown_sum
+		,(Interceptions) AS passing_interception_sum
+		,NULL AS passing_dropped_interception_sum
+		,(Sacks) AS passing_sack_sum
+		,(SackYardage) AS passing_sack_yards_sum
+		,NULL AS passing_fumble_sum
+		,NULL AS passing_batted_pass_sum
+		,NULL AS passing_catch_probability_attempt_sum
+		,NULL AS passing_catch_probability_sum
+		,NULL AS passing_catch_probability_completion_sum
+		,NULL AS passing_epa_attempt_sum
+		,NULL AS passing_epa_sum
+		,NULL AS passing_catch_probability_derrick_attempt_sum
+		,NULL AS passing_catch_probability_derrick_sum
+		,NULL AS passing_catch_probability_derrick_completion_sum
+		,GETDATE() AS updated_at
+	FROM NonProDB.dbo.Passing de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_passing_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+	DROP TABLE #temp_non_pro_player_play_passing_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)(c)
+
+	
+	Update/add to/delete from the Bane passing table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 --Update any rows that have changed
 	UPDATE [bane_college_player_passing_stats]
@@ -1634,19 +2657,608 @@ BEGIN
 		ON st.pff_play_id = pen.pff_play_id
 	INNER JOIN [college_play_result_facts] re --The play results table
 		ON st.pff_play_id = re.pff_play_id
-	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	WHERE 1 = 1
 		AND season >= @iSeason
 		AND is_no_play = 0
+		AND is_two_point_conversion = 0
 		AND gsis_game_key IS NOT NULL
 		AND st.gsis_player_id <> 0
+		AND season_type <> 'AS'
 	GROUP BY st.gsis_player_id
 		,CONCAT(last_name,', ',goes_by)
 		,an.season
 		,an.gsis_game_key
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)(a)
+
+	
+	Add in stats from NonProDB - play level.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_non_pro_player_play_special_teams_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_player_play_special_teams_stats') IS NOT NULL
+		DROP TABLE #temp_non_pro_player_play_special_teams_stats
+
+	SELECT ps.PlayerID AS gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,ps.GameKey AS gsis_game_key
+		,ps.PlayID AS gsis_play_id
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)','Extra Point - Blocked','Extra Point - Failed','Extra Point - Good') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kick_attempts
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Extra Point - Good') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kick_makes
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Blocked (Offense)','Extra Point - Blocked') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kick_blocks
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS field_goal_attempts
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS field_goal_makes
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Blocked (Offense)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS field_goal_blocks
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Extra Point - Blocked','Extra Point - Failed','Extra Point - Good') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS extra_point_attempts
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Extra Point - Good') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS extra_point_makes
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Extra Point - Blocked') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS extra_point_blocks
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 10 AND Yards <= 19 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_0_19
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 20 AND Yards <= 29 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_20_29
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 30 AND Yards <= 39 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_30_39
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 40 AND Yards <= 49 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_40_49
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 50 AND Yards <= 59 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_50_59
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)') AND Yards >= 60 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS attempts_60_plus
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 10 AND Yards <= 19 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_0_19
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 20 AND Yards <= 29 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_20_29
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 30 AND Yards <= 39 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_30_39
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 40 AND Yards <= 49 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_40_49
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 50 AND Yards <= 59 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_50_59
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Field Goal Yards') AND Yards >= 60 THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS makes_60_plus
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punting Yards','Punt Blocked (Offense)') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_attempts
+		,MAX(CASE WHEN stat_name IN ('Punting Yards') THEN Yards ELSE 0 END) AS punt_gross_yards_sum
+		,MAX(CASE WHEN stat_name IN ('Punting Yards') THEN Yards ELSE 0 END) - MAX(punt_return_yards) AS punt_net_yards_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punt Inside 20') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punts_inside_20
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punt With Touchback') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_touchbacks
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punt Return Yards','Punt Return Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_return_attempt
+		,MAX(CASE WHEN stat_name IN ('Punt Return Yards','Punt Return Yards, TD') THEN Yards ELSE 0 END) AS punt_return_yards_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punt - Fair Catch') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_return_fair_catches
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Punt Return Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_return_touchdowns
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Kickoff Yards') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_attempts
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Kickoff Yards') AND kickoff_return_yards IS NOT NULL THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoffs_returned
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Kickoff With Touchback') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_touchbacks
+		,MAX(CASE WHEN stat_name IN ('Kickoff Yards') AND kickoff_return_yards IS NOT NULL THEN kickoff_return_yards ELSE NULL END) AS kickoff_return_yards_allowed_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Kickoff Return Yards','Kickoff Return Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_return_attempts
+		,MAX(CASE WHEN stat_name IN ('Kickoff Return Yards','Kickoff Return Yards, TD') THEN Yards ELSE 0 END) AS kickoff_return_yards_sum
+		,CASE WHEN SUM(CASE WHEN stat_name IN ('Kickoff Return Yards, TD') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_return_touchdowns
+		,CASE WHEN SUM(CASE WHEN STPlayType = 5 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_tackles
+		,CASE WHEN SUM(CASE WHEN STPlayType = 5 AND stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS kickoff_assists
+		,CASE WHEN SUM(CASE WHEN STPlayType = 3 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_tackles
+		,CASE WHEN SUM(CASE WHEN STPlayType = 3 AND stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) >= 1 THEN 1 ELSE 0 END AS punt_assists
+	INTO #temp_non_pro_player_play_special_teams_stats
+	FROM daily_build_non_pro_play_stats ps
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON ps.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE is_no_play = 0
+	GROUP BY ps.PlayerID
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,ps.GameKey
+		,ps.PlayID
+	HAVING (SUM(CASE WHEN stat_name IN ('Field Goal Yards','Field Goal Missed Yards','Field Goal Blocked (Offense)','Extra Point - Blocked','Extra Point - Failed','Extra Point - Good') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Punting Yards','Punt Blocked (Offense)') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Punt Inside 20') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Punt With Touchback') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Punt Return Yards','Punt Return Yards, TD') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Punt - Fair Catch') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Kickoff Yards') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Kickoff With Touchback') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN stat_name IN ('Kickoff Return Yards','Kickoff Return Yards, TD') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN STPlayType = 5 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN STPlayType = 5 AND stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN STPlayType = 3 AND stat_name IN ('1/2 Tackle','1/2 Tackle for a Loss','Solo Tackle','Assisted Tackle','Tackle for a Loss') THEN 1 ELSE 0 END) > 0
+		OR SUM(CASE WHEN STPlayType = 3 AND stat_name IN ('Tackle Assist') THEN 1 ELSE 0 END) > 0)
+
+
+	INSERT INTO #temp_bane_college_player_special_teams_stats
+	SELECT gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_sum
+		,SUM(kick_attempts) AS kick_attempts
+		,SUM(kick_makes) AS kick_makes
+		,SUM(kick_blocks) AS kick_blocks
+		,SUM(field_goal_attempts) AS field_goal_attempts
+		,SUM(field_goal_makes) AS field_goal_makes
+		,SUM(field_goal_blocks) AS field_goal_blocks
+		,SUM(extra_point_attempts) AS extra_point_attempts
+		,SUM(extra_point_makes) AS extra_point_makes
+		,SUM(extra_point_blocks) AS extra_point_blocks
+		,SUM(attempts_0_19) AS attempts_0_19
+		,SUM(attempts_20_29) AS attempts_20_29
+		,SUM(attempts_30_39) AS attempts_30_39
+		,SUM(attempts_40_49) AS attempts_40_49
+		,SUM(attempts_50_59) AS attempts_50_59
+		,SUM(attempts_60_plus) AS attempts_60_plus
+		,SUM(makes_0_19) AS makes_0_19
+		,SUM(makes_20_29) AS makes_20_29
+		,SUM(makes_30_39) AS makes_30_39
+		,SUM(makes_40_49) AS makes_40_49
+		,SUM(makes_50_59) AS makes_50_59
+		,SUM(makes_60_plus) AS makes_60_plus
+		,SUM(punt_attempts) AS punt_attempts
+		,SUM(punt_gross_yards_sum) AS punt_gross_yards_sum
+		,SUM(punt_net_yards_sum) AS punt_net_yards_sum
+		,SUM(punts_inside_20) AS punts_inside_20
+		,NULL AS punts_inside_10
+		,SUM(punt_touchbacks) AS punt_touchbacks
+		,NULL AS punt_fair_catches
+		,SUM(punt_return_attempt) AS punt_return_attempt
+		,SUM(punt_return_yards_sum) AS punt_return_yards_sum
+		,SUM(punt_return_fair_catches) AS punt_return_fair_catches
+		,SUM(punt_return_touchdowns) AS punt_return_touchdowns
+		,SUM(kickoff_attempts) AS kickoff_attempts
+		,SUM(kickoffs_returned) AS kickoffs_returned
+		,SUM(kickoff_touchbacks) AS kickoff_touchbacks
+		,SUM(kickoff_return_yards_allowed_sum) AS kickoff_return_yards_allowed_sum
+		,SUM(kickoff_return_attempts) AS kickoff_return_attempts
+		,SUM(kickoff_return_yards_sum) AS kickoff_return_yards_sum
+		,SUM(kickoff_return_touchdowns) AS kickoff_return_touchdowns
+		,SUM(kickoff_tackles) AS kickoff_tackles
+		,SUM(kickoff_assists) AS kickoff_assists
+		,NULL AS kickoff_missed_tackles
+		,SUM(punt_tackles) AS punt_tackles
+		,SUM(punt_assists) AS punt_assists
+		,NULL AS punt_missed_tackles
+		,GETDATE() AS updated_at
+	FROM #temp_non_pro_player_play_special_teams_stats
+	GROUP BY gsis_player_id
+		,player
+		,season
+		,gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)(b)
+
+	
+	Add in stats from NonProDB - game level.
+
+	This one is a little more involved than the previous ones.  All the different special teams stats are in different tables (Kicking, Returning, etc.) so you have
+	to create a temp table first that you can add columns from all the tables into, then sum them all up by player and game at the end - because some players will
+	have stats in more than one of the tables in a given game.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_combine_special_teams exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_combine_special_teams') IS NOT NULL
+		DROP TABLE #temp_combine_special_teams
+
+	CREATE TABLE #temp_combine_special_teams
+	(gsis_player_ID INT
+	,season INT
+	,gsis_game_key INT
+	,kick_attempts INT
+	,kick_makes INT
+	,kick_blocks INT
+	,field_goal_attempts INT
+	,field_goal_makes INT
+	,field_goal_blocks INT
+	,extra_point_attempts INT
+	,extra_point_makes INT
+	,extra_point_blocks INT
+	,punt_attempts INT
+	,punt_gross_yards_sum INT
+	,punt_net_yards_sum INT
+	,punts_inside_20 INT
+	,punt_touchbacks INT
+	,punt_return_attempt INT
+	,punt_return_yards_sum INT
+	,punt_return_fair_catches INT
+	,punt_return_touchdowns INT
+	,kickoff_attempts INT
+	,kickoffs_returned INT
+	,kickoff_touchbacks INT
+	,kickoff_return_yards_allowed_sum INT
+	,kickoff_return_attempts INT
+	,kickoff_return_yards_sum INT
+	,kickoff_return_touchdowns INT
+	,kickoff_tackles INT
+	,kickoff_assists INT
+	)
+	
+
+--Add placekicking
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,FGMissed + FGMade + FGBlocked + XPMissed + XPMade + XPBlocked AS kick_attempts
+		,FGMade + XPMade AS kick_makes
+		,FGBlocked + XPBlocked AS kick_blocks
+		,FGMissed + FGMade + FGBlocked AS field_goal_attempts
+		,FGMade AS field_goal_makes
+		,FGBlocked AS field_goal_blocks
+		,XPMissed + XPMade + XPBlocked AS extra_point_attempts
+		,XPMade AS extra_point_makes
+		,XPBlocked AS extra_point_blocks
+		,NULL AS punt_attempts
+		,NULL AS punt_gross_yards_sum
+		,NULL AS punt_net_yards_sum
+		,NULL AS punts_inside_20
+		,NULL AS punt_touchbacks
+		,NULL AS punt_return_attempt
+		,NULL AS punt_return_yards_sum
+		,NULL AS punt_return_fair_catches
+		,NULL AS punt_return_touchdowns
+		,NULL AS kickoff_attempts
+		,NULL AS kickoffs_returned
+		,NULL AS kickoff_touchbacks
+		,NULL AS kickoff_return_yards_allowed_sum
+		,NULL AS kickoff_return_attempts
+		,NULL AS kickoff_return_yards_sum
+		,NULL AS kickoff_return_touchdowns
+		,NULL AS kickoff_tackles
+		,NULL AS kickoff_assists
+	FROM NonProDB.dbo.PlaceKicking de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND (de.FGMissed > 0 OR de.FGMade > 0 OR de.FGBlocked > 0 OR de.XPMissed > 0 OR de.XPMade > 0 OR de.XPBlocked > 0)
+		AND ac.ClubKey IS NULL
+
+
+--Add kickoffs
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS kick_attempts
+		,NULL AS kick_makes
+		,NULL AS kick_blocks
+		,NULL AS field_goal_attempts
+		,NULL AS field_goal_makes
+		,NULL AS field_goal_blocks
+		,NULL AS extra_point_attempts
+		,NULL AS extra_point_makes
+		,NULL AS extra_point_blocks
+		,NULL AS punt_attempts
+		,NULL AS punt_gross_yards_sum
+		,NULL AS punt_net_yards_sum
+		,NULL AS punts_inside_20
+		,NULL AS punt_touchbacks
+		,NULL AS punt_return_attempt
+		,NULL AS punt_return_yards_sum
+		,NULL AS punt_return_fair_catches
+		,NULL AS punt_return_touchdowns
+		,(Number) AS kickoff_attempts
+		,(Number - Touchbacks) AS kickoffs_returned
+		,(Touchbacks) AS kickoff_touchbacks
+		,(ReturnYards) AS kickoff_return_yards_allowed_sum
+		,NULL AS kickoff_return_attempts
+		,NULL AS kickoff_return_yards_sum
+		,NULL AS kickoff_return_touchdowns
+		,NULL AS kickoff_tackles
+		,NULL AS kickoff_assists
+	FROM NonProDB.dbo.Kickoffs de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND de.Number > 0
+		AND ac.ClubKey IS NULL
+
+
+--Add punts
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS kick_attempts
+		,NULL AS kick_makes
+		,NULL AS kick_blocks
+		,NULL AS field_goal_attempts
+		,NULL AS field_goal_makes
+		,NULL AS field_goal_blocks
+		,NULL AS extra_point_attempts
+		,NULL AS extra_point_makes
+		,NULL AS extra_point_blocks
+		,(Number) AS punt_attempts
+		,(Yards) AS punt_gross_yards_sum
+		,(Number * NetPuntingAverage) AS punt_net_yards_sum
+		,(Inside20) AS punts_inside_20
+		,(Touchbacks) AS punt_touchbacks
+		,NULL AS punt_return_attempt
+		,NULL AS punt_return_yards_sum
+		,NULL AS punt_return_fair_catches
+		,NULL AS punt_return_touchdowns
+		,NULL AS kickoff_attempts
+		,NULL AS kickoffs_returned
+		,NULL AS kickoff_touchbacks
+		,NULL AS kickoff_return_yards_allowed_sum
+		,NULL AS kickoff_return_attempts
+		,NULL AS kickoff_return_yards_sum
+		,NULL AS kickoff_return_touchdowns
+		,NULL AS kickoff_tackles
+		,NULL AS kickoff_assists
+	FROM NonProDB.dbo.Punting de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.PlayerID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND de.Number > 0
+		AND ac.ClubKey IS NULL
+
+
+--Add kickoff returns
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS kick_attempts
+		,NULL AS kick_makes
+		,NULL AS kick_blocks
+		,NULL AS field_goal_attempts
+		,NULL AS field_goal_makes
+		,NULL AS field_goal_blocks
+		,NULL AS extra_point_attempts
+		,NULL AS extra_point_makes
+		,NULL AS extra_point_blocks
+		,NULL AS punt_attempts
+		,NULL AS punt_gross_yards_sum
+		,NULL AS punt_net_yards_sum
+		,NULL AS punts_inside_20
+		,NULL AS punt_touchbacks
+		,NULL AS punt_return_attempt
+		,NULL AS punt_return_yards_sum
+		,NULL AS punt_return_fair_catches
+		,NULL AS punt_return_touchdowns
+		,NULL AS kickoff_attempts
+		,NULL AS kickoffs_returned
+		,NULL AS kickoff_touchbacks
+		,NULL AS kickoff_return_yards_allowed_sum
+		,(Number) AS kickoff_return_attempts
+		,(Yards) AS kickoff_return_yards_sum
+		,(Touchdowns) AS kickoff_return_touchdowns
+		,NULL AS kickoff_tackles
+		,NULL AS kickoff_assists
+	FROM NonProDB.dbo.[Returns] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND de.ReturnType = 2
+		AND de.Number > 0
+		AND ac.ClubKey IS NULL
+
+
+--Add punt returns
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS kick_attempts
+		,NULL AS kick_makes
+		,NULL AS kick_blocks
+		,NULL AS field_goal_attempts
+		,NULL AS field_goal_makes
+		,NULL AS field_goal_blocks
+		,NULL AS extra_point_attempts
+		,NULL AS extra_point_makes
+		,NULL AS extra_point_blocks
+		,NULL AS punt_attempts
+		,NULL AS punt_gross_yards_sum
+		,NULL AS punt_net_yards_sum
+		,NULL AS punts_inside_20
+		,NULL AS punt_touchbacks
+		,(Number) AS punt_return_attempt
+		,(Yards) AS punt_return_yards_sum
+		,(FairCatches) AS punt_return_fair_catches
+		,(Touchdowns) AS punt_return_touchdowns
+		,NULL AS kickoff_attempts
+		,NULL AS kickoffs_returned
+		,NULL AS kickoff_touchbacks
+		,NULL AS kickoff_return_yards_allowed_sum
+		,NULL AS kickoff_return_attempts
+		,NULL AS kickoff_return_yards_sum
+		,NULL AS kickoff_return_touchdowns
+		,NULL AS kickoff_tackles
+		,NULL AS kickoff_assists
+	FROM NonProDB.dbo.[Returns] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND de.ReturnType = 3
+		AND de.Number > 0
+		AND ac.ClubKey IS NULL
+
+
+--Add ST tackles
+	INSERT INTO #temp_combine_special_teams
+	SELECT de.PlayerID AS gsis_player_id
+		,ga.season
+		,de.GameKey AS gsis_game_key
+		,NULL AS kick_attempts
+		,NULL AS kick_makes
+		,NULL AS kick_blocks
+		,NULL AS field_goal_attempts
+		,NULL AS field_goal_makes
+		,NULL AS field_goal_blocks
+		,NULL AS extra_point_attempts
+		,NULL AS extra_point_makes
+		,NULL AS extra_point_blocks
+		,NULL AS punt_attempts
+		,NULL AS punt_gross_yards_sum
+		,NULL AS punt_net_yards_sum
+		,NULL AS punts_inside_20
+		,NULL AS punt_touchbacks
+		,NULL AS punt_return_attempt
+		,NULL AS punt_return_yards_sum
+		,NULL AS punt_return_fair_catches
+		,NULL AS punt_return_touchdowns
+		,NULL AS kickoff_attempts
+		,NULL AS kickoffs_returned
+		,NULL AS kickoff_touchbacks
+		,NULL AS kickoff_return_yards_allowed_sum
+		,NULL AS kickoff_return_attempts
+		,NULL AS kickoff_return_yards_sum
+		,NULL AS kickoff_return_touchdowns
+		,(STTackles) AS kickoff_tackles
+		,(STAssists) AS kickoff_assists
+	FROM NonProDB.dbo.Defensive de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_non_pro_player_play_special_teams_stats np
+		ON de.GameKey = np.gsis_game_key
+		AND de.PlayerID = np.gsis_player_id
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE np.gsis_game_key IS NULL
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND (de.STTackles > 0 OR de.STAssists > 0)
+		AND ac.ClubKey IS NULL
+
+
+--Sum and insert into the table for Bane step
+	INSERT INTO #temp_bane_college_player_special_teams_stats
+		SELECT gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,season
+		,gsis_game_key
+		,NULL AS play_count_sum
+		,SUM(kick_attempts) AS kick_attempts
+		,SUM(kick_makes) AS kick_makes
+		,SUM(kick_blocks) AS kick_blocks
+		,SUM(field_goal_attempts) AS field_goal_attempts
+		,SUM(field_goal_makes) AS field_goal_makes
+		,SUM(field_goal_blocks) AS field_goal_blocks
+		,SUM(extra_point_attempts) AS extra_point_attempts
+		,SUM(extra_point_makes) AS extra_point_makes
+		,SUM(extra_point_blocks) AS extra_point_blocks
+		,NULL AS attempts_0_19
+		,NULL AS attempts_20_29
+		,NULL AS attempts_30_39
+		,NULL AS attempts_40_49
+		,NULL AS attempts_50_59
+		,NULL AS attempts_60_plus
+		,NULL AS makes_0_19
+		,NULL AS makes_20_29
+		,NULL AS makes_30_39
+		,NULL AS makes_40_49
+		,NULL AS makes_50_59
+		,NULL AS makes_60_plus
+		,SUM(punt_attempts) AS punt_attempts
+		,SUM(punt_gross_yards_sum) AS punt_gross_yards_sum
+		,SUM(punt_net_yards_sum) AS punt_net_yards_sum
+		,SUM(punts_inside_20) AS punts_inside_20
+		,NULL AS punts_inside_10
+		,SUM(punt_touchbacks) AS punt_touchbacks
+		,NULL AS punt_fair_catches
+		,SUM(punt_return_attempt) AS punt_return_attempt
+		,SUM(punt_return_yards_sum) AS punt_return_yards_sum
+		,SUM(punt_return_fair_catches) AS punt_return_fair_catches
+		,SUM(punt_return_touchdowns) AS punt_return_touchdowns
+		,SUM(kickoff_attempts) AS kickoff_attempts
+		,SUM(kickoffs_returned) AS kickoffs_returned
+		,SUM(kickoff_touchbacks) AS kickoff_touchbacks
+		,SUM(kickoff_return_yards_allowed_sum) AS kickoff_return_yards_allowed_sum
+		,SUM(kickoff_return_attempts) AS kickoff_return_attempts
+		,SUM(kickoff_return_yards_sum) AS kickoff_return_yards_sum
+		,SUM(kickoff_return_touchdowns) AS kickoff_return_touchdowns
+		,SUM(kickoff_tackles) AS kickoff_tackles
+		,SUM(kickoff_assists) AS kickoff_assists
+		,NULL AS kickoff_missed_tackles
+		,NULL AS punt_tackles
+		,NULL AS punt_assists
+		,NULL AS punt_missed_tackles
+		,GETDATE() AS updated_at
+	FROM #temp_combine_special_teams de
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON de.gsis_player_ID = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	GROUP BY gsis_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by)
+		,season
+		,gsis_game_key
+
+
+	DROP TABLE #temp_non_pro_player_play_special_teams_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)(c)
+
+	
+	Update/add to/delete from the Bane special teams table.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 --Update any rows that have changed
 	UPDATE [bane_college_player_special_teams_stats]
@@ -1702,52 +3314,52 @@ BEGIN
 	FROM #temp_bane_college_player_special_teams_stats te
 	WHERE [bane_college_player_special_teams_stats].gsis_player_id = te.gsis_player_id
 		AND [bane_college_player_special_teams_stats].gsis_game_key = te.gsis_game_key
-		AND ([bane_college_player_special_teams_stats].play_count_sum <> te.play_count_sum
-		OR [bane_college_player_special_teams_stats].kick_attempts <> te.kick_attempts
-		OR [bane_college_player_special_teams_stats].kick_makes <> te.kick_makes
-		OR [bane_college_player_special_teams_stats].kick_blocks <> te.kick_blocks
-		OR [bane_college_player_special_teams_stats].field_goal_attempts <> te.field_goal_attempts
-		OR [bane_college_player_special_teams_stats].field_goal_makes <> te.field_goal_makes
-		OR [bane_college_player_special_teams_stats].field_goal_blocks <> te.field_goal_blocks
-		OR [bane_college_player_special_teams_stats].extra_point_attempts <> te.extra_point_attempts
-		OR [bane_college_player_special_teams_stats].extra_point_makes <> te.extra_point_makes
-		OR [bane_college_player_special_teams_stats].extra_point_blocks <> te.extra_point_blocks
-		OR [bane_college_player_special_teams_stats].attempts_0_19 <> te.attempts_0_19
-		OR [bane_college_player_special_teams_stats].attempts_20_29 <> te.attempts_20_29
-		OR [bane_college_player_special_teams_stats].attempts_30_39 <> te.attempts_30_39
-		OR [bane_college_player_special_teams_stats].attempts_40_49 <> te.attempts_40_49
-		OR [bane_college_player_special_teams_stats].attempts_50_59 <> te.attempts_50_59
-		OR [bane_college_player_special_teams_stats].attempts_60_plus <> te.attempts_60_plus
-		OR [bane_college_player_special_teams_stats].makes_0_19 <> te.makes_0_19
-		OR [bane_college_player_special_teams_stats].makes_20_29 <> te.makes_20_29
-		OR [bane_college_player_special_teams_stats].makes_30_39 <> te.makes_30_39
-		OR [bane_college_player_special_teams_stats].makes_40_49 <> te.makes_40_49
-		OR [bane_college_player_special_teams_stats].makes_50_59 <> te.makes_50_59
-		OR [bane_college_player_special_teams_stats].makes_60_plus <> te.makes_60_plus
-		OR [bane_college_player_special_teams_stats].punt_attempts <> te.punt_attempts
-		OR [bane_college_player_special_teams_stats].punt_gross_yards_sum <> te.punt_gross_yards_sum
-		OR [bane_college_player_special_teams_stats].punt_net_yards_sum <> te.punt_net_yards_sum
-		OR [bane_college_player_special_teams_stats].punts_inside_20 <> te.punts_inside_20
-		OR [bane_college_player_special_teams_stats].punts_inside_10 <> te.punts_inside_10
-		OR [bane_college_player_special_teams_stats].punt_touchbacks <> te.punt_touchbacks
-		OR [bane_college_player_special_teams_stats].punt_fair_catches <> te.punt_fair_catches
-		OR [bane_college_player_special_teams_stats].punt_return_attempt <> te.punt_return_attempt
-		OR [bane_college_player_special_teams_stats].punt_return_yards_sum <> te.punt_return_yards_sum
-		OR [bane_college_player_special_teams_stats].punt_return_fair_catches <> te.punt_return_fair_catches
-		OR [bane_college_player_special_teams_stats].punt_return_touchdowns <> te.punt_return_touchdowns
-		OR [bane_college_player_special_teams_stats].kickoff_attempts <> te.kickoff_attempts
-		OR [bane_college_player_special_teams_stats].kickoffs_returned <> te.kickoffs_returned
-		OR [bane_college_player_special_teams_stats].kickoff_touchbacks <> te.kickoff_touchbacks
-		OR [bane_college_player_special_teams_stats].kickoff_return_yards_allowed_sum <> te.kickoff_return_yards_allowed_sum
-		OR [bane_college_player_special_teams_stats].kickoff_return_attempts <> te.kickoff_return_attempts
-		OR [bane_college_player_special_teams_stats].kickoff_return_yards_sum <> te.kickoff_return_yards_sum
-		OR [bane_college_player_special_teams_stats].kickoff_return_touchdowns <> te.kickoff_return_touchdowns
-		OR ISNULL([bane_college_player_special_teams_stats].kickoff_tackles,0) <> te.kickoff_tackles
-		OR ISNULL([bane_college_player_special_teams_stats].kickoff_assists,0) <> te.kickoff_assists
-		OR ISNULL([bane_college_player_special_teams_stats].kickoff_missed_tackles,0) <> te.kickoff_missed_tackles
-		OR ISNULL([bane_college_player_special_teams_stats].punt_tackles,0) <> te.punt_tackles
-		OR ISNULL([bane_college_player_special_teams_stats].punt_assists,0) <> te.punt_assists
-		OR ISNULL([bane_college_player_special_teams_stats].punt_missed_tackles,0) <> te.punt_missed_tackles
+		AND (ISNULL([bane_college_player_special_teams_stats].play_count_sum,0) <> ISNULL(te.play_count_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kick_attempts,0) <> ISNULL(te.kick_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kick_makes,0) <> ISNULL(te.kick_makes,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kick_blocks,0) <> ISNULL(te.kick_blocks,0)
+		OR ISNULL([bane_college_player_special_teams_stats].field_goal_attempts,0) <> ISNULL(te.field_goal_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].field_goal_makes,0) <> ISNULL(te.field_goal_makes,0)
+		OR ISNULL([bane_college_player_special_teams_stats].field_goal_blocks,0) <> ISNULL(te.field_goal_blocks,0)
+		OR ISNULL([bane_college_player_special_teams_stats].extra_point_attempts,0) <> ISNULL(te.extra_point_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].extra_point_makes,0) <> ISNULL(te.extra_point_makes,0)
+		OR ISNULL([bane_college_player_special_teams_stats].extra_point_blocks,0) <> ISNULL(te.extra_point_blocks,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_0_19,0) <> ISNULL(te.attempts_0_19,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_20_29,0) <> ISNULL(te.attempts_20_29,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_30_39,0) <> ISNULL(te.attempts_30_39,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_40_49,0) <> ISNULL(te.attempts_40_49,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_50_59,0) <> ISNULL(te.attempts_50_59,0)
+		OR ISNULL([bane_college_player_special_teams_stats].attempts_60_plus,0) <> ISNULL(te.attempts_60_plus,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_0_19,0) <> ISNULL(te.makes_0_19,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_20_29,0) <> ISNULL(te.makes_20_29,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_30_39,0) <> ISNULL(te.makes_30_39,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_40_49,0) <> ISNULL(te.makes_40_49,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_50_59,0) <> ISNULL(te.makes_50_59,0)
+		OR ISNULL([bane_college_player_special_teams_stats].makes_60_plus,0) <> ISNULL(te.makes_60_plus,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_attempts,0) <> ISNULL(te.punt_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_gross_yards_sum,0) <> ISNULL(te.punt_gross_yards_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_net_yards_sum,0) <> ISNULL(te.punt_net_yards_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punts_inside_20,0) <> ISNULL(te.punts_inside_20,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punts_inside_10,0) <> ISNULL(te.punts_inside_10,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_touchbacks,0) <> ISNULL(te.punt_touchbacks,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_fair_catches,0) <> ISNULL(te.punt_fair_catches,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_return_attempt,0) <> ISNULL(te.punt_return_attempt,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_return_yards_sum,0) <> ISNULL(te.punt_return_yards_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_return_fair_catches,0) <> ISNULL(te.punt_return_fair_catches,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_return_touchdowns,0) <> ISNULL(te.punt_return_touchdowns,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_attempts,0) <> ISNULL(te.kickoff_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoffs_returned,0) <> ISNULL(te.kickoffs_returned,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_touchbacks,0) <> ISNULL(te.kickoff_touchbacks,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_return_yards_allowed_sum,0) <> ISNULL(te.kickoff_return_yards_allowed_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_return_attempts,0) <> ISNULL(te.kickoff_return_attempts,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_return_yards_sum,0) <> ISNULL(te.kickoff_return_yards_sum,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_return_touchdowns,0) <> ISNULL(te.kickoff_return_touchdowns,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_tackles,0) <> ISNULL(te.kickoff_tackles,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_assists,0) <> ISNULL(te.kickoff_assists,0)
+		OR ISNULL([bane_college_player_special_teams_stats].kickoff_missed_tackles,0) <> ISNULL(te.kickoff_missed_tackles,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_tackles,0) <> ISNULL(te.punt_tackles,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_assists,0) <> ISNULL(te.punt_assists,0)
+		OR ISNULL([bane_college_player_special_teams_stats].punt_missed_tackles,0) <> ISNULL(te.punt_missed_tackles,0)
 		)
 
 
@@ -1823,6 +3435,837 @@ BEGIN
 
 	DROP TABLE #temp_bane_college_player_special_teams_stats
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(10)
+
+	
+	Penalty Stats (as of 09/2021)
+
+    OUTPUT TABLES:            
+		bane_college_player_penalty_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_bane_college_player_penalty_stats exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bane_college_player_penalty_stats') IS NOT NULL
+		DROP TABLE #temp_bane_college_player_penalty_stats
+
+	SELECT pen.gsis_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,gsis_game_key
+		,SUM(penalty_any_pff) AS penalties
+		,SUM(penalty_declined_pff) AS declined_penalties
+		,SUM(penalty_offsetting_pff) AS offsetting_penalties
+		,SUM(penalty_delay_of_game) AS delay_of_game
+		,SUM(penalty_offsides) AS offsides
+		,SUM(penalty_taunting) AS taunting
+		,SUM(penalty_unnecessary_roughness) AS unnecessary_roughness
+		,SUM(penalty_unsportsmanlike_conduct) AS unsportsmanlike_conduct
+		,SUM(penalty_defensive_holding) AS holding_defense
+		,SUM(penalty_defensive_pass_interference) AS defensive_pass_interference
+		,SUM(penalty_encroachment) AS encroachment
+		,SUM(penalty_facemask) AS facemask
+		,SUM(penalty_horse_collar) AS horse_collar
+		,SUM(penalty_illegal_contact) AS illegal_contact
+		,SUM(penalty_illegal_use_of_hands) AS illegal_hands
+		,SUM(penalty_neutral_zone_infraction) AS neutral_zone
+		,SUM(penalty_roughing_the_passer) AS roughing_the_passer
+		,SUM(penalty_chop_block) AS chop_block
+		,SUM(penalty_clipping) AS clipping
+		,SUM(penalty_crackback) AS crackback
+		,SUM(penalty_false_start) AS false_start
+		,SUM(penalty_illegal_blindside_block) AS blindside_block
+		,SUM(penalty_illegal_block_above_waist) AS block_above_waist
+		,SUM(penalty_illegal_formation) AS illegal_formation
+		,SUM(penalty_illegal_forward_pass) AS illegal_forward_pass
+		,SUM(penalty_illegal_motion) AS illegal_motion
+		,SUM(penalty_illegal_procedure) AS illegal_procedure
+		,SUM(penalty_illegal_shift) AS illegal_shift
+		,SUM(penalty_illegal_substitution) AS illegal_substitution
+		,SUM(penalty_ineligible_downfield_on_pass) AS ineligible_downfield
+		,SUM(penalty_intentional_grounding) AS intentional_grounding
+		,SUM(penalty_low_block) AS low_block
+		,SUM(penalty_offensive_holding) AS holding_offense
+		,SUM(penalty_offensive_pass_interference) AS offensive_pass_interference
+		,SUM(penalty_tripping) AS tripping
+		,SUM(penalty_twelve_men) AS twelve_men
+		,SUM(drawn_penalty_pff) AS drawn_penalties
+		,SUM(drawn_defensive_holding) AS drawn_holding_defense
+		,SUM(drawn_defensive_pass_interference) AS drawn_defensive_pass_interference
+		,SUM(drawn_illegal_contact) AS drawn_illegal_contact
+		,SUM(drawn_offensive_holding) AS drawn_offensive_holding
+		,SUM(drawn_offensive_pass_interference) AS drawn_offensive_pass_interference
+		,GETDATE() AS updated_at
+	INTO #temp_bane_college_player_penalty_stats
+	FROM [college_player_play_penalty_facts] pen --The player penalty table
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
+		ON pen.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_context_facts] co --The play context table
+		ON pen.pff_play_id = co.pff_play_id
+	INNER JOIN [college_play_type_facts] ty --The play type table
+		ON pen.pff_play_id = ty.pff_play_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON pen.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	WHERE 1 = 1
+		AND season >= @iSeason
+		--AND is_qb_kneel = 0
+		--AND is_qb_spike = 0
+		--AND is_lateral = 0
+		AND is_two_point_conversion = 0
+		AND pen.gsis_player_id <> 0
+		AND gsis_game_key IS NOT NULL
+		AND season_type <> 'AS'
+	GROUP BY pen.gsis_player_id
+		,CONCAT(last_name,', ',goes_by)
+		,season
+		,gsis_game_key
+
+
+--Update any rows that have changed
+	UPDATE [bane_college_player_penalty_stats]
+	SET player = te.player
+		,season = te.season
+		,penalties = te.penalties
+		,declined_penalties = te.declined_penalties
+		,offsetting_penalties = te.offsetting_penalties
+		,delay_of_game = te.delay_of_game
+		,offsides = te.offsides
+		,taunting = te.taunting
+		,unnecessary_roughness = te.unnecessary_roughness
+		,unsportsmanlike_conduct = te.unsportsmanlike_conduct
+		,holding_defense = te.holding_defense
+		,defensive_pass_interference = te.defensive_pass_interference
+		,encroachment = te.encroachment
+		,facemask = te.facemask
+		,horse_collar = te.horse_collar
+		,illegal_contact = te.illegal_contact 
+		,illegal_hands = te.illegal_hands
+		,neutral_zone = te.neutral_zone
+		,roughing_the_passer = te.roughing_the_passer
+		,chop_block = te.chop_block
+		,clipping = te.clipping 
+		,crackback = te.crackback
+		,false_start = te.false_start
+		,blindside_block = te.blindside_block
+		,block_above_waist = te.block_above_waist
+		,illegal_formation = te.illegal_formation
+		,illegal_forward_pass = te.illegal_forward_pass
+		,illegal_motion = te.illegal_motion
+		,illegal_procedure = te.illegal_procedure
+		,illegal_shift = te.illegal_shift
+		,illegal_substitution = te.illegal_substitution
+		,ineligible_downfield = te.ineligible_downfield
+		,intentional_grounding = te.intentional_grounding
+		,low_block = te.low_block
+		,holding_offense = te.holding_offense
+		,offensive_pass_interference = te.offensive_pass_interference
+		,tripping = te.tripping
+		,twelve_men = te.twelve_men
+		,drawn_penalties = te.drawn_penalties
+		,drawn_holding_defense = te.drawn_holding_defense
+		,drawn_defensive_pass_interference = te.drawn_defensive_pass_interference
+		,drawn_illegal_contact = te.drawn_illegal_contact
+		,drawn_offensive_holding = te.drawn_offensive_holding
+		,drawn_offensive_pass_interference = te.drawn_offensive_pass_interference
+		,updated_at = te.updated_at
+	FROM #temp_bane_college_player_penalty_stats te
+	WHERE [bane_college_player_penalty_stats].gsis_player_id = te.gsis_player_id
+		AND [bane_college_player_penalty_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_college_player_penalty_stats].penalties <> te.penalties
+		OR [bane_college_player_penalty_stats].declined_penalties <> te.declined_penalties
+		OR [bane_college_player_penalty_stats].offsetting_penalties <> te.offsetting_penalties
+		OR [bane_college_player_penalty_stats].delay_of_game <> te.delay_of_game
+		OR [bane_college_player_penalty_stats].offsides <> te.offsides
+		OR [bane_college_player_penalty_stats].taunting <> te.taunting
+		OR [bane_college_player_penalty_stats].unnecessary_roughness <> te.unnecessary_roughness
+		OR [bane_college_player_penalty_stats].unsportsmanlike_conduct <> te.unsportsmanlike_conduct
+		OR [bane_college_player_penalty_stats].holding_defense <> te.holding_defense
+		OR [bane_college_player_penalty_stats].defensive_pass_interference <> te.defensive_pass_interference
+		OR [bane_college_player_penalty_stats].encroachment <> te.encroachment
+		OR [bane_college_player_penalty_stats].facemask <> te.facemask
+		OR [bane_college_player_penalty_stats].horse_collar <> te.horse_collar
+		OR [bane_college_player_penalty_stats].illegal_contact <> te.illegal_contact 
+		OR [bane_college_player_penalty_stats].illegal_hands <> te.illegal_hands
+		OR [bane_college_player_penalty_stats].neutral_zone <> te.neutral_zone
+		OR [bane_college_player_penalty_stats].roughing_the_passer <> te.roughing_the_passer
+		OR [bane_college_player_penalty_stats].chop_block <> te.chop_block
+		OR [bane_college_player_penalty_stats].clipping <> te.clipping 
+		OR [bane_college_player_penalty_stats].crackback <> te.crackback
+		OR [bane_college_player_penalty_stats].false_start <> te.false_start
+		OR [bane_college_player_penalty_stats].blindside_block <> te.blindside_block
+		OR [bane_college_player_penalty_stats].block_above_waist <> te.block_above_waist
+		OR [bane_college_player_penalty_stats].illegal_formation <> te.illegal_formation
+		OR [bane_college_player_penalty_stats].illegal_forward_pass <> te.illegal_forward_pass
+		OR [bane_college_player_penalty_stats].illegal_motion <> te.illegal_motion
+		OR [bane_college_player_penalty_stats].illegal_procedure <> te.illegal_procedure
+		OR [bane_college_player_penalty_stats].illegal_shift <> te.illegal_shift
+		OR [bane_college_player_penalty_stats].illegal_substitution <> te.illegal_substitution
+		OR [bane_college_player_penalty_stats].ineligible_downfield <> te.ineligible_downfield
+		OR [bane_college_player_penalty_stats].intentional_grounding <> te.intentional_grounding
+		OR [bane_college_player_penalty_stats].low_block <> te.low_block
+		OR [bane_college_player_penalty_stats].holding_offense <> te.holding_offense
+		OR [bane_college_player_penalty_stats].offensive_pass_interference <> te.offensive_pass_interference
+		OR [bane_college_player_penalty_stats].tripping <> te.tripping
+		OR [bane_college_player_penalty_stats].twelve_men <> te.twelve_men
+		OR [bane_college_player_penalty_stats].drawn_penalties <> te.drawn_penalties
+		OR [bane_college_player_penalty_stats].drawn_holding_defense <> te.drawn_holding_defense
+		OR [bane_college_player_penalty_stats].drawn_defensive_pass_interference <> te.drawn_defensive_pass_interference
+		OR [bane_college_player_penalty_stats].drawn_illegal_contact <> te.drawn_illegal_contact
+		OR [bane_college_player_penalty_stats].drawn_offensive_holding <> te.drawn_offensive_holding
+		OR [bane_college_player_penalty_stats].drawn_offensive_pass_interference <> te.drawn_offensive_pass_interference
+		)
+
+
+--Insert any new rows
+	INSERT INTO [bane_college_player_penalty_stats]
+	SELECT te.*
+	FROM #temp_bane_college_player_penalty_stats te
+	LEFT JOIN [bane_college_player_penalty_stats] ba
+		ON te.gsis_player_id = ba.gsis_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.gsis_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [bane_college_player_penalty_stats]
+	FROM [bane_college_player_penalty_stats] ba
+	LEFT JOIN #temp_bane_college_player_penalty_stats te
+		ON ba.gsis_player_id = te.gsis_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.gsis_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	DROP TABLE #temp_bane_college_player_penalty_stats
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)
+
+	
+	Game playtimes
+
+	You have to do this one here in case there are any players showing up in the stat tables that don't appear in the game playtimes table.  They need a row
+	in that table to show up on Bane.  Most should be in there from the sp_bane_college_player_game_playtimes, this is a just in case check to add any leftover.
+
+    OUTPUT TABLES:            
+		bane_college_player_game_playtimes
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(a)
+
+	
+	Blocking
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_blocking_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(b)
+
+	
+	Run defense
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_run_defense_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(c)
+
+	
+	Coverage
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_coverage_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Defensive] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(d)
+
+	
+	Pass rush
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_pass_rush_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Defensive] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(e)
+
+	
+	Receiving
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_receiving_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Receiving] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(f)
+
+	
+	Running
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_running_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Rushing] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(g)
+
+	
+	Tackling
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_tackling_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Defensive] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(h)
+
+	
+	Passing
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(sc.Club_ID,cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_passing_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [bane_college_player_game_playtimes] cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [NonProDB].[dbo].[Passing] ns
+		ON gr.gsis_player_id = ns.PlayerID
+		AND gr.gsis_game_key = ns.GameKey
+		AND ns.Clubkey NOT LIKE '%[^0-9]%'
+		AND ns.PlayerID NOT LIKE '%[^0-9]%'
+	LEFT JOIN [NonProDB].[dbo].[Club] sc
+		ON ns.Clubkey = sc.ClubKey
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)(i)
+
+	
+	Special teams
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	INSERT INTO [bane_college_player_game_playtimes]
+	SELECT DISTINCT gr.gsis_player_id
+		,pl.id AS bane_player_id
+		,gr.gsis_game_key
+		,COALESCE(cphs.ncaa_club_id,pls.ncaa_club_id) AS ncaa_club_id
+		,gr.season
+		,ga.Season_Type AS season_type
+		,ga.[Week] AS [week]
+		,0 AS snap_count_offense
+		,0 AS snap_count_offense_team
+		,0 AS snap_count_defense
+		,0 AS snap_count_defense_team
+		,0 AS snap_count_special_teams
+		,0 AS snap_count_special_teams_team
+		,0 AS snap_count_4_phase_team
+		,0 AS snap_count_special_teams_weighted
+		,0 AS snap_count_special_teams_weighted_team
+		,0 AS snap_count_4_phase
+		,0 AS snap_count_all
+		,0 AS snap_count_od
+		,0 AS snap_count_weighted
+		,0 AS equivalent_games_no_weight
+		,0 AS equivalent_games
+		,0 AS equivalent_games_off_def
+		,0 AS snap_count_offense_no_garbage
+		,0 AS snap_count_offense_no_garbage_team
+		,0 AS snap_count_defense_no_garbage
+		,0 AS snap_count_defense_no_garbage_team
+		,0 AS snap_count_4_phase_no_garbage
+		,0 AS snap_count_4_phase_no_garbage_team
+		,0 AS snap_count_offense_no_garbage_inj_team
+		,0 AS snap_count_defense_no_garbage_inj_team
+		,0 AS snap_count_4_phase_no_garbage_inj_team
+		,GETDATE() AS updated_at
+		,'unknown' AS status_game_played
+	FROM [bane_college_player_special_teams_stats] gr
+	INNER JOIN [NonProDB].[dbo].[Game] ga
+		ON gr.gsis_game_key = ga.GameKey
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON gr.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	LEFT JOIN bane_college_player_game_playtimes cp
+		ON gr.gsis_game_key = cp.gsis_game_key
+		AND gr.gsis_player_id = cp.gsis_player_id
+	LEFT JOIN [BaneProductionAnalytics].dbo.college_play_histories cph
+		ON pl.id = cph.player_id
+		AND gr.season = cph.season
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools cphs
+		ON cph.school_id = cphs.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools pls
+		ON pl.ncaa_club_id = pls.id
+	WHERE cp.gsis_game_key IS NULL
+		AND gr.gsis_player_id not in (279281,329499,363527)
 
 
 
