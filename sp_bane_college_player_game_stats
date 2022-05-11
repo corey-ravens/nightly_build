@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats_20211202]    Script Date: 5/11/2022 12:16:47 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_college_player_game_stats_20220107]    Script Date: 5/11/2022 12:17:55 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -33,7 +33,10 @@ GO
 
 
 
-ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats_20211202] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+
+ALTER PROCEDURE [dbo].[sp_bane_college_player_game_stats_20220107] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
@@ -113,6 +116,7 @@ BEGIN
 		ON pb.pff_play_id = pp.pff_play_id
 	WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_offensive_holding_play = 1))
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
@@ -295,11 +299,11 @@ BEGIN
 		ON pg.pff_grade = ya.pff_grade
 	WHERE 1 = 1
 		AND season >= @iSeason
-		--AND is_no_play = 0
+		AND is_no_play = 0
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
-		--AND is_run = 1
+		AND is_run = 1
 		AND pg.gsis_player_id <> 0
 		AND gsis_game_key IS NOT NULL
 
@@ -452,8 +456,9 @@ BEGIN
 		ON ppas.pff_pp_id = pen.pff_pp_id
 	 WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1)))
-		--AND is_pass = 1
+		AND is_pass = 1
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
@@ -687,8 +692,9 @@ BEGIN
 		AND pl.is_deleted = 0
 	 WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR drawn_offensive_holding = 1)))
-		--AND is_pass = 1
+		AND is_pass = 1
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
@@ -812,8 +818,9 @@ BEGIN
 		ON rec.pff_play_id = pa.pff_play_id
 	WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1)))
-		--AND is_pass = 1
+		AND is_pass = 1
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
@@ -1014,8 +1021,8 @@ BEGIN
 		ON run.pff_play_id = pp.pff_play_id
 	WHERE 1 = 1
 		AND season >= @iSeason
-		--AND is_no_play = 0
-		--AND is_run = 1
+		AND is_no_play = 0
+		AND (is_run = 1 OR is_scramble = 1)
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
 		--AND is_lateral = 0
@@ -1064,14 +1071,14 @@ BEGIN
 		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS running_epa_sum
 		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play > 0 THEN 1 ELSE 0 END) AS running_success_sum
 		,GETDATE() AS updated_at
-		,SUM(CASE WHEN is_scramble = 1 THEN 1 ELSE 0 END) AS scrambles
-		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_yards ELSE 0 END) AS scrambling_yards
-		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_tackle_avoided ELSE 0 END) AS scrambling_tackles_avoided
-		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS scrambling_epa_attempts
-		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS scrambling_epa
-		,SUM(CASE WHEN is_scramble = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play > 0 THEN 1 ELSE 0 END) AS scrambling_successes
-		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_touchdown ELSE 0 END) AS scrambling_touchdowns
-		,SUM(CASE WHEN is_scramble = 1 THEN scrambling_fumble ELSE 0 END) AS scrambling_fumbles
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN 1 ELSE 0 END) AS scrambles
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_yards ELSE 0 END) AS scrambling_yards
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_tackle_avoided ELSE 0 END) AS scrambling_tackles_avoided
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS scrambling_epa_attempts
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS scrambling_epa
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play > 0 THEN 1 ELSE 0 END) AS scrambling_successes
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_touchdown ELSE 0 END) AS scrambling_touchdowns
+		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_fumble ELSE 0 END) AS scrambling_fumbles
 	INTO #temp_bane_college_player_running_stats
 	FROM #temp_player_running_college run
 	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
@@ -1254,6 +1261,7 @@ BEGIN
 		AND pl.is_deleted = 0
 	WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR penalty_facemask = 1 OR penalty_horse_collar = 1))
 		--AND is_qb_kneel = 0
 		--AND is_qb_spike = 0
@@ -1383,6 +1391,7 @@ BEGIN
 		ON ps.pff_play_id = pen.pff_play_id
 	WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		--AND is_two_point_conversion = 0
 		--AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1))
 		--AND is_qb_kneel = 0
@@ -1630,6 +1639,7 @@ BEGIN
 		AND pl.is_deleted = 0
 	WHERE 1 = 1
 		AND season >= @iSeason
+		AND is_no_play = 0
 		AND gsis_game_key IS NOT NULL
 		AND st.gsis_player_id <> 0
 	GROUP BY st.gsis_player_id
