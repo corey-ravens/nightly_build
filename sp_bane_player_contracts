@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_contracts]    Script Date: 5/11/2022 1:18:34 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_player_contracts]    Script Date: 5/11/2022 1:18:23 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -16,11 +16,16 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_analysis_players_contracts] (@oReturnCD INT OUTPUT) as
+
+
+
+
+
+ALTER procedure [dbo].[sp_bane_player_contracts] (@oReturnCD INT OUTPUT) as
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Procedure Name:	analysis_players_contracts
+Procedure Name:	bane_player_contracts
 Author:			Corey Krawiec
 Creation Date:	06/03/2016
 Description:       
@@ -108,7 +113,7 @@ begin
 		ON LTRIM(RTRIM(tt.StartClubAbbr)) = LTRIM(RTRIM(sc.code))
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
 		ON LTRIM(RTRIM(tt.PotentialClubAbbr)) = LTRIM(RTRIM(pc.code))
-	WHERE 1=1
+	WHERE 1 = 1
 		AND LeagueType = 'NFL'
 		AND TransStatus = 30
 	ORDER BY PlayerID
@@ -1407,7 +1412,7 @@ ORDER BY nfl_contract_id
 		FROM #temp_player_contract_summary cr
 		LEFT JOIN #temp_insurance_contracts ic
 			ON cr.nfl_contract_id = ic.nfl_contract_id
-		INNER JOIN stage_nfl_league_dates da
+		INNER JOIN nfl_league_year_dates da
 			ON cr.first_contract_year = da.season
 		WHERE cr.signing_date >= '08/04/2011'
 		ORDER BY nfl_player_id
@@ -1433,30 +1438,30 @@ ORDER BY nfl_contract_id
 	IF OBJECT_ID('tempdb..#temp_day_of_cap_hits') IS NOT NULL
 		DROP TABLE #temp_day_of_cap_hits
 
-		SELECT ca.nfl_player_id
-			,ca.nfl_club_id
+		SELECT ca.PlayerID AS nfl_player_id
+			,ca.ClubID AS nfl_club_id
 			,co.nfl_contract_id
 			,co.player
 			,signing_date
 			,last_year_renegotiation
 			,signing_type
-			,SUM(CASE WHEN ca.season = co.first_contract_year THEN cap_amount ELSE 0 END) AS first_year_cap_amount
-			,SUM(CASE WHEN ca.season = co.first_contract_year + 1 THEN cap_amount ELSE 0 END) AS second_year_cap_amount
-			,SUM(CASE WHEN ca.season <> co.first_contract_year THEN cap_amount ELSE 0 END) AS remaining_cap_amount
+			,SUM(CASE WHEN ca.season = co.first_contract_year THEN CapAmt ELSE 0 END) AS first_year_cap_amount
+			,SUM(CASE WHEN ca.season = co.first_contract_year + 1 THEN CapAmt ELSE 0 END) AS second_year_cap_amount
+			,SUM(CASE WHEN ca.season <> co.first_contract_year THEN CapAmt ELSE 0 END) AS remaining_cap_amount
 		INTO #temp_day_of_cap_hits
 		FROM #temp_find_renegotiations co
-		INNER JOIN analysis_players_salary_cap ca
-			ON co.nfl_player_id = ca.nfl_player_id
+		INNER JOIN ClubDB.dbo.CapRollup ca
+			ON co.nfl_player_id = ca.PlayerID
 			AND ca.season >= co.first_contract_year
-			AND co.nfl_club_id = ca.nfl_club_id
-			AND co.signing_date = ca.from_date
+			AND co.nfl_club_id = ca.ClubID
+			AND co.signing_date = ca.FromDate
 		WHERE signing_type IN ('Renegotiation','Extension')
 			--AND in_season_renegotiation = 0
 			--AND year_reduction = 0
 			--AND last_year_renegotiation = 0
 			--AND dummy_renegotiation = 0
-		GROUP BY ca.nfl_player_id
-			,ca.nfl_club_id
+		GROUP BY ca.PlayerID
+			,ca.ClubID
 			,co.nfl_contract_id
 			,co.player
 			,most_recent_contract
@@ -1469,30 +1474,30 @@ ORDER BY nfl_contract_id
 	IF OBJECT_ID('tempdb..#temp_day_before_cap_hits') IS NOT NULL
 		DROP TABLE #temp_day_before_cap_hits
 
-		SELECT ca.nfl_player_id
-			,ca.nfl_club_id
+		SELECT ca.PlayerID AS nfl_player_id
+			,ca.ClubID AS nfl_club_id
 			,co.nfl_contract_id
 			,co.player
 			,signing_date
 			,signing_type
 			,last_year_renegotiation
-			,SUM(CASE WHEN ca.season = co.first_contract_year THEN cap_amount ELSE 0 END) AS first_year_cap_amount
-			,SUM(CASE WHEN ca.season = co.first_contract_year + 1 THEN cap_amount ELSE 0 END) AS second_year_cap_amount
-			,SUM(CASE WHEN ca.season <> co.first_contract_year THEN cap_amount ELSE 0 END) AS remaining_cap_amount
+			,SUM(CASE WHEN ca.season = co.first_contract_year THEN CapAmt ELSE 0 END) AS first_year_cap_amount
+			,SUM(CASE WHEN ca.season = co.first_contract_year + 1 THEN CapAmt ELSE 0 END) AS second_year_cap_amount
+			,SUM(CASE WHEN ca.season <> co.first_contract_year THEN CapAmt ELSE 0 END) AS remaining_cap_amount
 		INTO #temp_day_before_cap_hits
 		FROM #temp_find_renegotiations co
-		INNER JOIN analysis_players_salary_cap ca
-			ON co.nfl_player_id = ca.nfl_player_id
+		INNER JOIN ClubDB.dbo.CapRollup ca
+			ON co.nfl_player_id = ca.PlayerID
 			AND ca.season >= co.first_contract_year
-			AND co.nfl_club_id = ca.nfl_club_id
-			AND DATEADD(D,-1,co.signing_date) = ca.to_date
+			AND co.nfl_club_id = ca.ClubID
+			AND DATEADD(D,-1,co.signing_date) = ca.ToDate
 		WHERE signing_type IN ('Renegotiation','Extension')
 			--AND in_season_renegotiation = 0
 			--AND year_reduction = 0
 			--AND last_year_renegotiation = 0
 			--AND dummy_renegotiation = 0
-		GROUP BY ca.nfl_player_id
-			,ca.nfl_club_id
+		GROUP BY ca.PlayerID
+			,ca.ClubID
 			,co.nfl_contract_id
 			,co.player
 			,most_recent_contract
@@ -1654,17 +1659,17 @@ IF OBJECT_ID('tempdb..#temp_incentives') IS NOT NULL
 
 	Create the players contract analysis table.
 
-	ANALYSIS TABLES:
-	analysis_players_contracts
+	PERMANENT TABLES:
+	bane_player_contracts
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 	
 	DECLARE @current_season INT
-	SELECT @current_season = (SELECT MAX(season) FROM map_nfl_league_year_dates WHERE GETDATE() >= league_year_start)
+	SELECT @current_season = (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= league_year_start)
 
-	TRUNCATE TABLE analysis_players_contracts
+	TRUNCATE TABLE bane_player_contracts
 	
-	INSERT INTO analysis_players_contracts
+	INSERT INTO bane_player_contracts
 		(nfl_contract_id
 		,previous_nfl_contract_id
 		,nfl_player_id
@@ -1719,6 +1724,7 @@ IF OBJECT_ID('tempdb..#temp_incentives') IS NOT NULL
 		,incentive_maximum
 		,incentive_difference
 		,incentive_earn_back_percent
+		,updated_at
 		)
 	SELECT cs.nfl_contract_id
 		,previous_nfl_contract_id
@@ -1779,6 +1785,7 @@ IF OBJECT_ID('tempdb..#temp_incentives') IS NOT NULL
 		,ii.max_incentives AS incentive_maximum
 		,CASE WHEN re.renegotiation_type IN ('cap_deal','likely_pay_cut','likely_raise') or re.is_extension = 1 THEN ii.incentive_difference ELSE NULL END AS incentive_difference
 		,CASE WHEN (re.renegotiation_type IN ('cap_deal','likely_pay_cut') OR re.is_extension = 1) AND incentive_difference > 0 THEN ABS(ii.incentive_difference / NULLIF(re.cap_difference,0)) ELSE NULL END AS incentive_earn_back_percent
+		,GETDATE() AS udpated_at
 	FROM #temp_player_contract_summary cs
 	LEFT JOIN #temp_guaranteed_money gm
 		ON cs.nfl_contract_id = gm.nfl_contract_id
