@@ -1,0 +1,619 @@
+
+
+
+
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_advanced_statistics_scores]    Script Date: 5/12/2022 10:53:26 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_analysis_players_advanced_statistics_scores] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Program Name:	analysis_players_advanced_statistics_scores
+Author:			Corey Krawiec
+Creation Date:	10/30/2019
+Description:       
+
+
+	This program is to create the current analytics sequence list for pro and college players
+				
+Variables:
+	
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Convert the advanced stats to points for the overall score.  Basically take the player's percentile for each stat and multiply it by how important that stat is to 
+come up with a "stat score" for each one. Then sum them up for an overall score.
+
+As of 10/2019 the weight are based somewhat arbitrarily on discussions with Eric and the scouts. We will eventually want these weights to 
+be determinted more objectively.
+
+OUTPUT TABLES:
+#temp_statistic_scores
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_scores exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_scores') IS NOT NULL
+	DROP TABLE #temp_statistic_scores
+
+	SELECT rs.nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player_name
+		,rs.season
+		,rs.season_type_adjusted
+		,rolling_game_stats
+		,translation AS position
+		,CASE WHEN team = 'defense' THEN 
+			CASE WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') AND po.translation IN ('IB') THEN 'IB' 
+				WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') THEN 'EDGE'
+				WHEN def.position_blt IN ('IB','MIKE','WILL') AND po.translation IN ('DS') THEN 'SS'
+				WHEN def.position_blt IN ('IB','MIKE','WILL') THEN 'IB'
+				ELSE def.position_blt
+			END
+		 WHEN team = 'offense' THEN
+			CASE WHEN ofp.position_blt = 'WR' THEN CASE WHEN ofp.receiver_type IN ('SLOT','INSIDE') THEN 'SLOT' ELSE ofp.receiver_type END
+				WHEN ofp.position_blt IN ('LOT','ROT','OT') THEN 'OT'
+				WHEN ofp.position_blt IN ('LOG','ROG','OG') THEN 'OG'
+				ELSE ofp.position_blt
+			END
+		END AS position_blt
+		,statistic_id
+		,ty.code AS statistic_code
+		,statistic_value
+		,statistic_percentile
+		,statistic_grade
+		,CASE WHEN team = 'defense' AND def.position_blt IN ('NT','DT3T','DE5T') THEN
+			CASE WHEN ty.[name] = 'disruption_rate' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.20
+			END
+		WHEN team = 'defense' AND def.position_blt IN ('DE43','OB34','RUSH','SAM') AND po.translation NOT IN ('IB') THEN
+			CASE WHEN ty.[name] = 'disruption_rate' THEN COALESCE(statistic_percentile,0) * 0.25
+				WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.10
+				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.25
+				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'close_on_ball_percentage' THEN COALESCE(statistic_percentile,0) * 0.20
+			END
+		WHEN team = 'defense' AND ((def.position_blt IN ('IB','MIKE','WILL') AND po.translation NOT IN ('DS')) OR (def.position_blt IN ('DE43','OB34','RUSH','SAM') AND po.translation IN ('IB'))) THEN
+			CASE WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.10
+				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'close_on_ball_percentage' THEN COALESCE(statistic_percentile,0) * 0.30
+			END
+		WHEN team = 'defense' AND def.position_blt IN ('CB','NB') THEN
+			CASE WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'pbu_percentage' THEN COALESCE(statistic_percentile,0) * 0.40
+				WHEN ty.[name] = 'completion_yards_against' THEN COALESCE(statistic_percentile,0) * 0.40
+			END
+		WHEN team = 'defense' AND (def.position_blt IN ('FS','SS','DS') OR (def.position_blt IN ('IB','MIKE','WILL') AND po.translation IN ('DS'))) THEN
+			CASE WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.34
+				WHEN ty.[name] = 'pbu_percentage' THEN COALESCE(statistic_percentile,0) * 0.33
+				WHEN ty.[name] = 'completion_yards_against' THEN COALESCE(statistic_percentile,0) * 0.33
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('RB') THEN
+			CASE WHEN ty.[name] = 'yards_per_route' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'tackles_avoided' THEN COALESCE(statistic_percentile,0) * 0.60
+				WHEN ty.[name] = 'disruptions_allowed' THEN COALESCE(statistic_percentile,0) * 0.10
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('FB') THEN
+			CASE WHEN ty.[name] = 'yards_per_route' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'tackles_avoided' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'run_block_wins' THEN COALESCE(statistic_percentile,0) * 0.60
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('WR') THEN
+			CASE WHEN ty.[name] = 'yards_per_route' THEN COALESCE(statistic_percentile,0) * 0.40
+				WHEN ty.[name] = 'catch_rate' THEN COALESCE(statistic_percentile,0) * 0.30
+				WHEN ty.[name] = 'yards_after_catch' THEN COALESCE(statistic_percentile,0) * 0.3
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('TE') THEN
+			CASE WHEN ty.[name] = 'yards_per_route' THEN COALESCE(statistic_percentile,0) * 0.50
+				WHEN ty.[name] = 'yards_after_catch' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'disruptions_allowed' THEN COALESCE(statistic_percentile,0) * 0.05
+				WHEN ty.[name] = 'run_block_wins' THEN COALESCE(statistic_percentile,0) * 0.25
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('LOT','LOG','OC','ROG','ROT','LT','LG','RG','RT','OT','OG') THEN
+			CASE WHEN ty.[name] = 'disruptions_allowed' THEN COALESCE(statistic_percentile,0) * 0.60
+				WHEN ty.[name] = 'run_block_wins' THEN COALESCE(statistic_percentile,0) * 0.40
+			END
+		WHEN team = 'offense' AND ofp.position_blt IN ('QB') THEN
+			CASE WHEN ty.[name] = 'completion_percentage_over_expected' THEN COALESCE(statistic_percentile,0) * 0.50
+				WHEN ty.[name] = 'expected_points_added' THEN COALESCE(statistic_percentile,0) * 0.50
+			END
+		END AS statistic_score
+	INTO #temp_statistic_scores
+	FROM r_output_regressed_statistics rs
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON rs.nfl_player_id = pl.nfl_id	
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	INNER JOIN map_regressed_statistic_type ty
+		ON rs.statistic_id = ty.id	
+	LEFT JOIN analysis_players_season_position_defense def
+		ON rs.nfl_player_id = def.nfl_player_id
+		AND rs.season = def.season
+		AND rs.season_type_adjusted = def.season_type_adjusted
+		AND def.defense_type = 'ALL'
+	LEFT JOIN analysis_players_season_position_offense ofp
+		ON rs.nfl_player_id = ofp.nfl_player_id
+		AND rs.season = ofp.season
+		AND rs.season_type_adjusted = ofp.season_type_adjusted
+	WHERE rs.season_type_adjusted = 'REGPOST'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the stats scores to a full season season score.
+
+OUTPUT TABLES:
+#temp_statistic_scores_season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_scores_season exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_scores_season') IS NOT NULL
+	DROP TABLE #temp_statistic_scores_season
+
+	SELECT nfl_player_id
+		,player_name
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,position_blt
+		,SUM(statistic_score) AS statistic_score_sum
+		,RANK() OVER (PARTITION BY season, season_type_adjusted, position_blt, rolling_game_stats ORDER BY SUM(statistic_score) DESC) AS statistic_score_rank
+	INTO #temp_statistic_scores_season
+	FROM #temp_statistic_scores
+	GROUP BY nfl_player_id
+		,player_name
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,position_blt
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Rank the percentiles within the position groups.
+
+OUTPUT TABLES:
+#temp_statistic_ranks
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_ranks exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_ranks') IS NOT NULL
+	DROP TABLE #temp_statistic_ranks
+
+	SELECT nfl_player_id
+		,player_name
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,statistic_code
+		,RANK() OVER (PARTITION BY season, season_type_adjusted, position_blt, rolling_game_stats, statistic_id ORDER BY statistic_percentile DESC) AS statistic_percentile_rank
+	INTO #temp_statistic_ranks
+	FROM #temp_statistic_scores
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Pivot the stat rankings.
+
+OUTPUT TABLES:
+#temp_statistic_ranks_pivot
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_ranks_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_ranks_pivot') IS NOT NULL
+	DROP TABLE #temp_statistic_ranks_pivot
+
+	SELECT nfl_player_id
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,[RYA] AS statistic_rank_RYA
+		,[COB] AS statistic_rank_COB
+		,[ETKL] AS statistic_rank_ETKL
+		,[STOP] AS statistic_rank_STOP
+		,[CTCH] AS statistic_rank_CTCH
+		,[RBW] AS statistic_rank_RBW
+		,[DIS] AS statistic_rank_DIS
+		,[CYA] AS statistic_rank_CYA
+		,[RDW] AS statistic_rank_RDW
+		,[YPR] AS statistic_rank_YPR
+		,[DISA] AS statistic_rank_DISA
+		,[TAV] AS statistic_rank_TAV
+		,[YAC] AS statistic_rank_YAC
+		,[PBU] AS statistic_rank_PBU
+		,[CPOE] AS statistic_rank_CPOE
+		,[EPA] AS statistic_rank_EPA
+	INTO #temp_statistic_ranks_pivot
+	FROM (
+		SELECT nfl_player_id
+			,season
+			,season_type_adjusted
+			,rolling_game_stats
+			,statistic_code
+			,statistic_percentile_rank
+		FROM #temp_statistic_ranks WHERE statistic_code IN ('RYA','COB','ETKL','STOP','CTCH','RBW','DIS','CYA','RDW','YPR','DISA','TAV','YAC','PBU','CPOE','EPA')) up
+	PIVOT (MAX(statistic_percentile_rank) FOR statistic_code IN ([RYA],[COB],[ETKL],[STOP],[CTCH],[RBW],[DIS],[CYA],[RDW],[YPR],[DISA],[TAV],[YAC],[PBU],[CPOE],[EPA])) AS pvt
+	WHERE 1 = 1
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Pivot the stat values.
+
+OUTPUT TABLES:
+#temp_statistic_values_pivot
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_values_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_values_pivot') IS NOT NULL
+	DROP TABLE #temp_statistic_values_pivot
+
+	SELECT nfl_player_id
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,[RYA] AS statistic_value_RYA
+		,[COB] AS statistic_value_COB
+		,[ETKL] AS statistic_value_ETKL
+		,[STOP] AS statistic_value_STOP
+		,[CTCH] AS statistic_value_CTCH
+		,[RBW] AS statistic_value_RBW
+		,[DIS] AS statistic_value_DIS
+		,[CYA] AS statistic_value_CYA
+		,[RDW] AS statistic_value_RDW
+		,[YPR] AS statistic_value_YPR
+		,[DISA] AS statistic_value_DISA
+		,[TAV] AS statistic_value_TAV
+		,[YAC] AS statistic_value_YAC
+		,[PBU] AS statistic_value_PBU
+		,[CPOE] AS statistic_value_CPOE
+		,[EPA] AS statistic_value_EPA
+	INTO #temp_statistic_values_pivot
+	FROM (
+		SELECT nfl_player_id
+			,season
+			,season_type_adjusted
+			,rolling_game_stats
+			,statistic_code
+			,statistic_value
+		FROM #temp_statistic_scores WHERE statistic_code IN ('RYA','COB','ETKL','STOP','CTCH','RBW','DIS','CYA','RDW','YPR','DISA','TAV','YAC','PBU','CPOE','EPA')) up
+	PIVOT (MAX(statistic_value) FOR statistic_code IN ([RYA],[COB],[ETKL],[STOP],[CTCH],[RBW],[DIS],[CYA],[RDW],[YPR],[DISA],[TAV],[YAC],[PBU],[CPOE],[EPA])) AS pvt
+	WHERE 1 = 1
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Pivot the stat grades.
+
+OUTPUT TABLES:
+#temp_statistic_grades_pivot
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_grades_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_grades_pivot') IS NOT NULL
+	DROP TABLE #temp_statistic_grades_pivot
+
+	SELECT nfl_player_id
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,[RYA] AS statistic_grade_RYA
+		,[COB] AS statistic_grade_COB
+		,[ETKL] AS statistic_grade_ETKL
+		,[STOP] AS statistic_grade_STOP
+		,[CTCH] AS statistic_grade_CTCH
+		,[RBW] AS statistic_grade_RBW
+		,[DIS] AS statistic_grade_DIS
+		,[CYA] AS statistic_grade_CYA
+		,[RDW] AS statistic_grade_RDW
+		,[YPR] AS statistic_grade_YPR
+		,[DISA] AS statistic_grade_DISA
+		,[TAV] AS statistic_grade_TAV
+		,[YAC] AS statistic_grade_YAC
+		,[PBU] AS statistic_grade_PBU
+		,[CPOE] AS statistic_grade_CPOE
+		,[EPA] AS statistic_grade_EPA
+	INTO #temp_statistic_grades_pivot
+	FROM (
+		SELECT nfl_player_id
+			,season
+			,season_type_adjusted
+			,rolling_game_stats
+			,statistic_code
+			,statistic_grade
+		FROM #temp_statistic_scores WHERE statistic_code IN ('RYA','COB','ETKL','STOP','CTCH','RBW','DIS','CYA','RDW','YPR','DISA','TAV','YAC','PBU','CPOE','EPA')) up
+	PIVOT (MAX(statistic_grade) FOR statistic_code IN ([RYA],[COB],[ETKL],[STOP],[CTCH],[RBW],[DIS],[CYA],[RDW],[YPR],[DISA],[TAV],[YAC],[PBU],[CPOE],[EPA])) AS pvt
+	WHERE 1 = 1
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Pivot the stat percentiles.
+
+OUTPUT TABLES:
+#temp_statistic_percentiles_pivot
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+  -- Check if #temp_statistic_percentiles_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statistic_percentiles_pivot') IS NOT NULL
+	DROP TABLE #temp_statistic_percentiles_pivot
+
+	SELECT nfl_player_id
+		,season
+		,season_type_adjusted
+		,rolling_game_stats
+		,[RYA] AS statistic_percentile_RYA
+		,[COB] AS statistic_percentile_COB
+		,[ETKL] AS statistic_percentile_ETKL
+		,[STOP] AS statistic_percentile_STOP
+		,[CTCH] AS statistic_percentile_CTCH
+		,[RBW] AS statistic_percentile_RBW
+		,[DIS] AS statistic_percentile_DIS
+		,[CYA] AS statistic_percentile_CYA
+		,[RDW] AS statistic_percentile_RDW
+		,[YPR] AS statistic_percentile_YPR
+		,[DISA] AS statistic_percentile_DISA
+		,[TAV] AS statistic_percentile_TAV
+		,[YAC] AS statistic_percentile_YAC
+		,[PBU] AS statistic_percentile_PBU
+		,[CPOE] AS statistic_percentile_CPOE
+		,[EPA] AS statistic_percentile_EPA
+	INTO #temp_statistic_percentiles_pivot
+	FROM (
+		SELECT nfl_player_id
+			,season
+			,season_type_adjusted
+			,rolling_game_stats
+			,statistic_code
+			,statistic_percentile
+		FROM #temp_statistic_scores WHERE statistic_code IN ('RYA','COB','ETKL','STOP','CTCH','RBW','DIS','CYA','RDW','YPR','DISA','TAV','YAC','PBU','CPOE','EPA')) up
+	PIVOT (MAX(statistic_percentile) FOR statistic_code IN ([RYA],[COB],[ETKL],[STOP],[CTCH],[RBW],[DIS],[CYA],[RDW],[YPR],[DISA],[TAV],[YAC],[PBU],[CPOE],[EPA])) AS pvt
+	WHERE 1 = 1
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get raning and scores from the pro grades model and market values - this is a temp solution for now.
+
+TEMP TABLES:
+#temp_model_prediction_ranks
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_model_predictions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_model_predictions') IS NOT NULL
+	DROP TABLE #temp_model_predictions
+
+	SELECT ac.nfl_player_id
+		,pl.id AS bane_player_id
+		,mv.player
+		,mv.season
+		,CASE WHEN team = 'defense' THEN 
+			CASE WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') AND po.translation IN ('IB') THEN 'IB' 
+				WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') THEN 'EDGE'
+				WHEN def.position_blt IN ('IB','MIKE','WILL') AND po.translation IN ('DS') THEN 'SS'
+				WHEN def.position_blt IN ('IB','MIKE','WILL') THEN 'IB'
+				ELSE def.position_blt
+			END
+		 WHEN team = 'offense' THEN
+			CASE WHEN ofp.position_blt = 'WR' THEN CASE WHEN ofp.receiver_type IN ('SLOT','INSIDE') THEN 'SLOT' ELSE ofp.receiver_type END
+				WHEN ofp.position_blt IN ('LOT','ROT','OT') THEN 'OT'
+				WHEN ofp.position_blt IN ('LOG','ROG','OG') THEN 'OG'
+				ELSE ofp.position_blt
+			END
+		END AS position_blt
+		,gr.[value] AS grade_bucket
+		,mv.market_value_scaled_to_modern_years AS predicted_apy_percent
+		,mv.market_value_original
+	INTO #temp_model_predictions
+	FROM Analytics.dbo.analysis_players_pro_model_grades ac
+	INNER JOIN BaneProductionAnalytics.dbo.grades gr
+		ON ac.grade_id = gr.id
+		AND gr.active = 1
+	INNER JOIN AnalyticsSandbox.dbo.market_values_rescaled_2021 mv
+		ON ac.nfl_player_id = mv.nfl_player_id
+		AND ac.season = mv.season
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON ac.nfl_player_id = pl.nfl_id	
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN Analytics.dbo.analysis_players_season_position_defense def
+		ON ac.nfl_player_id = def.nfl_player_id
+		AND ac.season = def.season
+		AND def.season_type_adjusted = 'REGPOST'
+		AND def.defense_type = 'ALL'
+	LEFT JOIN Analytics.dbo.analysis_players_season_position_offense ofp
+		ON ac.nfl_player_id = ofp.nfl_player_id
+		AND ac.season = ofp.season
+		AND ofp.season_type_adjusted = 'REGPOST'
+	WHERE ac.season = 2021
+		AND ac.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_model_grades WHERE season = 2021)
+	ORDER BY mv.market_value_scaled_to_modern_years DESC
+
+
+-- Check if #temp_model_position_counts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_model_position_counts') IS NOT NULL
+	DROP TABLE #temp_model_position_counts
+
+	SELECT season
+		,position_blt
+		,COUNT(*) AS position_count
+	INTO #temp_model_position_counts
+	FROM #temp_model_predictions
+	GROUP BY season
+		,position_blt
+
+
+-- Check if #temp_model_prediction_ranks exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_model_prediction_ranks') IS NOT NULL
+	DROP TABLE #temp_model_prediction_ranks
+
+	SELECT mp.*
+		,RANK() OVER (PARTITION BY mp.season, mp.position_blt ORDER BY grade_bucket DESC, predicted_apy_percent DESC, market_value_original DESC) AS predicted_apy_rank
+		,(position_count - RANK() OVER (PARTITION BY mp.season, mp.position_blt ORDER BY grade_bucket DESC, predicted_apy_percent DESC, market_value_original DESC) + 1) / CAST(position_count AS FLOAT) AS predicted_apy_percentile
+	INTO #temp_model_prediction_ranks
+	FROM #temp_model_predictions mp
+	INNER JOIN #temp_model_position_counts co
+		ON mp.season = co.season
+		AND mp.position_blt = co.position_blt
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the scores to the pivoted rankings.
+
+ANALYSIS TABLES:
+analysis_players_advanced_statistics_scores
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE analysis_players_advanced_statistics_scores
+
+	INSERT INTO analysis_players_advanced_statistics_scores
+	SELECT ss.nfl_player_id
+		,ss.player_name
+		,ss.season
+		,ss.season_type_adjusted
+		,ss.rolling_game_stats
+		,ss.position_blt
+		,CASE WHEN ss.season = 2021 THEN pl.predicted_apy_percentile ELSE ss.statistic_score_sum END AS statistic_score_sum
+		,CASE WHEN ss.season = 2021 THEN pl.predicted_apy_rank ELSE ss.statistic_score_rank END AS statistic_score_rank
+		,statistic_value_RYA
+		,statistic_percentile_RYA
+		,statistic_grade_RYA
+		--,statistic_rank_RYA
+		,statistic_value_COB
+		,statistic_grade_COB
+		,statistic_percentile_COB
+		--,statistic_rank_COB
+		,statistic_value_ETKL
+		,statistic_grade_ETKL
+		,statistic_percentile_ETKL
+		--,statistic_rank_ETKL
+		,statistic_value_STOP
+		,statistic_grade_STOP
+		,statistic_percentile_STOP		
+		--,statistic_rank_STOP
+		,statistic_value_CTCH
+		,statistic_grade_CTCH
+		,statistic_percentile_CTCH
+		--,statistic_rank_CTCH
+		,statistic_value_RBW
+		,statistic_grade_RBW
+		,statistic_percentile_RBW
+		--,statistic_rank_RBW
+		,statistic_value_DIS
+		,statistic_grade_DIS
+		,statistic_percentile_DIS
+		--,statistic_rank_DIS
+		,statistic_value_CYA
+		,statistic_grade_CYA
+		,statistic_percentile_CYA
+		--,statistic_rank_CYA
+		,statistic_value_RDW
+		,statistic_grade_RDW
+		,statistic_percentile_RDW
+		--,statistic_rank_RDW
+		,statistic_value_YPR
+		,statistic_grade_YPR
+		,statistic_percentile_YPR
+		--,statistic_rank_YPR
+		,statistic_value_DISA
+		,statistic_grade_DISA
+		,statistic_percentile_DISA
+		--,statistic_rank_DISA
+		,statistic_value_TAV
+		,statistic_grade_TAV
+		,statistic_percentile_TAV
+		--,statistic_rank_TAV
+		,statistic_value_YAC
+		,statistic_grade_YAC
+		,statistic_percentile_YAC
+		--,statistic_rank_YAC
+		,statistic_value_PBU
+		,statistic_grade_PBU
+		,statistic_percentile_PBU
+		--,statistic_rank_PBU
+		,statistic_value_CPOE
+		,statistic_grade_CPOE
+		,statistic_percentile_CPOE
+		--,statistic_rank_CPOE
+		,statistic_value_EPA		
+		,statistic_grade_EPA
+		,statistic_percentile_EPA
+		--,statistic_rank_EPA
+		,GETDATE() AS created_at
+	FROM #temp_statistic_scores_season ss
+	LEFT JOIN #temp_statistic_values_pivot va
+		ON ss.nfl_player_id = va.nfl_player_id
+		AND ss.season = va.season
+		AND ss.season_type_adjusted = va.season_type_adjusted
+		AND ss.rolling_game_stats = va.rolling_game_stats
+	LEFT JOIN #temp_statistic_grades_pivot gr
+		ON ss.nfl_player_id = gr.nfl_player_id
+		AND ss.season = gr.season
+		AND ss.season_type_adjusted = gr.season_type_adjusted
+		AND ss.rolling_game_stats = gr.rolling_game_stats
+	LEFT JOIN #temp_statistic_percentiles_pivot pe
+		ON ss.nfl_player_id = pe.nfl_player_id
+		AND ss.season = pe.season
+		AND ss.season_type_adjusted = pe.season_type_adjusted
+		AND ss.rolling_game_stats = pe.rolling_game_stats
+	LEFT JOIN #temp_statistic_ranks_pivot ra
+		ON ss.nfl_player_id = ra.nfl_player_id
+		AND ss.season = ra.season
+		AND ss.season_type_adjusted = ra.season_type_adjusted
+		AND ss.rolling_game_stats = ra.rolling_game_stats
+	INNER JOIN #temp_model_prediction_ranks pl
+		ON ss.nfl_player_id = pl.nfl_player_id
+
+
+
+	PROC_END:
+
+
+	RETURN @oReturnCD 
+
+
+
+
+
+
+GO
+
+
