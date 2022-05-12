@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_teams_statistics]    Script Date: 5/12/2022 10:55:52 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_team_stats]    Script Date: 5/12/2022 10:55:44 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -19,16 +19,12 @@ GO
 
 
 
-
-
-
-
-ALTER procedure [dbo].[sp_analysis_teams_statistics] (@oReturnCD INT OUTPUT) as
+ALTER procedure [dbo].[sp_bane_pro_team_stats] (@oReturnCD INT OUTPUT) as
 
 
 /*********************************************************************************
 
-Procedure Name:	sp_analysis_teams_statistics
+Procedure Name:	sp_bane_pro_team_stats
 Author:			Corey Krawiec
 Creation Date:	09/09/2019
 Description:       
@@ -52,27 +48,27 @@ BEGIN
 
 	set @oReturnCD = 0 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create tables with the offense and defense penalty data. The league doesn't separate it out so you can't use their tables, you only get total penalties committed and
-drawn that way.
+	Create tables with the offense and defense penalty data. The league doesn't separate it out so you can't use their tables, you only get total penalties committed and
+	drawn that way.
 
-*Note that for for (09/09/2019) you are counting multiple penalties on the same play as multiple penalties. If two players commit penalties, then the team adds two
-penalties to its total. Just noting now in case you decide to change that later.
+	*Note that for for (09/09/2019) you are counting multiple penalties on the same play as multiple penalties. If two players commit penalties, then the team adds two
+	penalties to its total. Just noting now in case you decide to change that later.
 
-OUTPUT TABLES:
-#temp_penalty_number_def
-#temp_penalty_yards_def
-#temp_penalty_number_off
-#temp_penalty_yards_off
+	OUTPUT TABLES:
+	#temp_penalty_number_def
+	#temp_penalty_yards_def
+	#temp_penalty_number_off
+	#temp_penalty_yards_off
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_penalty_number_def exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_penalty_number_def') IS NOT NULL
-	DROP TABLE #temp_penalty_number_def
+	-- Check if #temp_penalty_number_def exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_penalty_number_def') IS NOT NULL
+		DROP TABLE #temp_penalty_number_def
 
-	SELECT p.season
+	SELECT season
 		,cl.nfl_club_id
 		,d.team AS club
 		,42 AS stat_id
@@ -80,13 +76,13 @@ IF OBJECT_ID('tempdb..#temp_penalty_number_def') IS NOT NULL
 		,'defense' AS side_of_ball
 		,SUM(CASE WHEN d.penalty IS NOT NULL OR d.offsetting_penalty IS NOT NULL THEN 1 ELSE 0 END) AS stat_value
 	INTO #temp_penalty_number_def
-	FROM PFFUltimate.dbo.defense d
-	INNER JOIN PFFUltimate.dbo.plays p
+	FROM daily_build_pff_defense d
+	INNER JOIN daily_build_pff_plays p
 		ON d.play_id = p.play_id
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON d.team = cl.code
 	--	AND cl.is_disabled = 0
-	WHERE season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND [week] NOT LIKE 'P%'
 	GROUP BY season
 		,cl.nfl_club_id
@@ -94,11 +90,11 @@ IF OBJECT_ID('tempdb..#temp_penalty_number_def') IS NOT NULL
 
 
 
--- Check if #temp_penalty_yards_def exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_penalty_yards_def') IS NOT NULL
-	DROP TABLE #temp_penalty_yards_def
+	-- Check if #temp_penalty_yards_def exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_penalty_yards_def') IS NOT NULL
+		DROP TABLE #temp_penalty_yards_def
 
-	SELECT season AS season
+	SELECT season
 		,cl.nfl_club_id
 		,d.team AS club
 		,43 AS stat_id
@@ -106,24 +102,24 @@ IF OBJECT_ID('tempdb..#temp_penalty_yards_def') IS NOT NULL
 		,'defense' AS side_of_ball
 		,SUM(CASE WHEN d.penalty IS NOT NULL THEN (CASE WHEN p.penalty_yards < 0 THEN p.penalty_yards * -1 ELSE p.penalty_yards END) ELSE 0 END) AS stat_value
 	INTO #temp_penalty_yards_def
-	FROM PFFUltimate.dbo.defense d
-	INNER JOIN PFFUltimate.dbo.plays p
+	FROM daily_build_pff_defense d
+	INNER JOIN daily_build_pff_plays p
 		ON d.play_id = p.play_id
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON d.team = cl.code
 	--	AND cl.is_disabled = 0
-	WHERE season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND [week] NOT LIKE 'P%'
 	GROUP BY season
 		,cl.nfl_club_id
 		,d.team
 
 
--- Check if #temp_penalty_number_off exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_penalty_number_off') IS NOT NULL
-	DROP TABLE #temp_penalty_number_off
+	-- Check if #temp_penalty_number_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_penalty_number_off') IS NOT NULL
+		DROP TABLE #temp_penalty_number_off
 
-	SELECT season AS season
+	SELECT season
 		,cl.nfl_club_id
 		,d.team AS club
 		,42 AS stat_id
@@ -131,24 +127,24 @@ IF OBJECT_ID('tempdb..#temp_penalty_number_off') IS NOT NULL
 		,'offense' AS side_of_ball
 		,SUM(CASE WHEN d.penalty IS NOT NULL OR d.offsetting_penalty IS NOT NULL THEN 1 ELSE 0 END) AS stat_value
 	INTO #temp_penalty_number_off
-	FROM PFFUltimate.dbo.offense d
-	INNER JOIN PFFUltimate.dbo.plays p
+	FROM daily_build_pff_offense d
+	INNER JOIN daily_build_pff_plays p
 		ON d.play_id = p.play_id
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON d.team = cl.code
 	--	AND cl.is_disabled = 0
-	WHERE season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND [week] NOT LIKE 'P%'
 	GROUP BY season
 		,cl.nfl_club_id
 		,d.team
 
 
--- Check if #temp_penalty_yards_off exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_penalty_yards_off') IS NOT NULL
-	DROP TABLE #temp_penalty_yards_off
+	-- Check if #temp_penalty_yards_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_penalty_yards_off') IS NOT NULL
+		DROP TABLE #temp_penalty_yards_off
 
-	SELECT season AS season
+	SELECT season
 		,cl.nfl_club_id
 		,d.team AS club
 		,43 AS stat_id
@@ -156,31 +152,31 @@ IF OBJECT_ID('tempdb..#temp_penalty_yards_off') IS NOT NULL
 		,'offense' AS side_of_ball
 		,SUM(CASE WHEN d.penalty IS NOT NULL THEN (CASE WHEN p.penalty_yards < 0 THEN p.penalty_yards * -1 ELSE p.penalty_yards END) ELSE 0 END) AS stat_value
 	INTO #temp_penalty_yards_off
-	FROM PFFUltimate.dbo.offense d
-	INNER JOIN PFFUltimate.dbo.plays p
+	FROM daily_build_pff_offense d
+	INNER JOIN daily_build_pff_plays p
 		ON d.play_id = p.play_id
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON d.team = cl.code
 	--	AND cl.is_disabled = 0
-	WHERE season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND [week] NOT LIKE 'P%'
 	GROUP BY season
 		,cl.nfl_club_id
 		,d.team
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create a table with all the NFL basic offensive stats
+	Create a table with all the NFL basic offensive stats
 
-OUTPUT TABLES:
-#temp_nfl_stats_offense
+	OUTPUT TABLES:
+	#temp_nfl_stats_offense
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_offense exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats_offense') IS NOT NULL
-	DROP TABLE #temp_nfl_stats_offense
+	-- Check if #temp_nfl_stats_offense exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats_offense') IS NOT NULL
+		DROP TABLE #temp_nfl_stats_offense
 
 	SELECT ga.Season AS season
 		,cl.ClubID AS nfl_club_id
@@ -197,7 +193,7 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_offense') IS NOT NULL
 		ON st.GameKey = ga.GameKey
 	INNER JOIN ProDB.dbo.Club cl
 		ON st.ClubKey = cl.ClubKey
-	WHERE ga.Season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE ga.Season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND Season_Type IN ('REG')
 		AND cl.Club_Code NOT IN ('NFC','AFC')
 		AND UPPER(ty.[Description]) NOT LIKE '%PENALT%'
@@ -210,25 +206,25 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_offense') IS NOT NULL
 		,st.StatType
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-To get all the defensive stats, you need a table that lists all the opponents for each team so you can join the team stats back to it.
+	To get all the defensive stats, you need a table that lists all the opponents for each team so you can join the team stats back to it.
 
-OUTPUT TABLES:
-#temp_target_games
+	OUTPUT TABLES:
+	#temp_target_games
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_team_games exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_team_games') IS NOT NULL
-	DROP TABLE #temp_team_games
+	-- Check if #temp_team_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_team_games') IS NOT NULL
+		DROP TABLE #temp_team_games
 
 	SELECT Season AS season
 		,GameKey AS gsis_game_key
 		,Home_Team_Key AS target_team_key
 	INTO #temp_team_games
 	FROM ProDB.dbo.Game ga
-	WHERE ga.Season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE ga.Season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND Season_Type IN ('REG')
 
 	
@@ -237,13 +233,13 @@ IF OBJECT_ID('tempdb..#temp_team_games') IS NOT NULL
 		,GameKey AS gsis_game_key
 		,Visit_Team_Key AS target_team_key
 	FROM ProDB.dbo.Game ga
-	WHERE ga.Season >= (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+	WHERE ga.Season >= (SELECT MAX(season) FROM nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
 		AND Season_Type IN ('REG')
 
 
--- Check if #temp_target_games exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_target_games') IS NOT NULL
-	DROP TABLE #temp_target_games
+	-- Check if #temp_target_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_target_games') IS NOT NULL
+		DROP TABLE #temp_target_games
 
 	SELECT t1.season
 		,t1.gsis_game_key
@@ -256,18 +252,18 @@ IF OBJECT_ID('tempdb..#temp_target_games') IS NOT NULL
 		AND t1.target_team_key <> t2.target_team_key
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the NFL stats tables to the target schedule table so you can get defensive versions of all the same stats.
+	Join the NFL stats tables to the target schedule table so you can get defensive versions of all the same stats.
 
-OUTPUT TABLES:
-#temp_nfl_stats_defense
+	OUTPUT TABLES:
+	#temp_nfl_stats_defense
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_defense exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats_defense') IS NOT NULL
-	DROP TABLE #temp_nfl_stats_defense
+	-- Check if #temp_nfl_stats_defense exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats_defense') IS NOT NULL
+		DROP TABLE #temp_nfl_stats_defense
 
 	SELECT ga.season
 		,cl.ClubID AS nfl_club_id
@@ -296,18 +292,18 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_defense') IS NOT NULL
 		,st.StatType
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Append the defensive stats to the offensive stats.
+	Append the defensive stats to the offensive stats.
 
-OUTPUT TABLES:
-#temp_nfl_stats
+	OUTPUT TABLES:
+	#temp_nfl_stats
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_pivot exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats') IS NOT NULL
-	DROP TABLE #temp_nfl_stats
+	-- Check if #temp_nfl_stats_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats') IS NOT NULL
+		DROP TABLE #temp_nfl_stats
 
 	SELECT *
 	INTO #temp_nfl_stats
@@ -318,14 +314,14 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats') IS NOT NULL
 	FROM #temp_nfl_stats_defense
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Append the penalties to the offensive and defensive stats.
+	Append the penalties to the offensive and defensive stats.
 
-OUTPUT TABLES:
-#temp_nfl_stats
+	OUTPUT TABLES:
+	#temp_nfl_stats
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 	INSERT INTO #temp_nfl_stats
 	SELECT *
@@ -344,18 +340,18 @@ OUTPUT TABLES:
 	FROM #temp_penalty_yards_off
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create a table with all the NFL basic stats
+	Create a table with all the NFL basic stats
 
-OUTPUT TABLES:
-#temp_nfl_stats_pivot
+	OUTPUT TABLES:
+	#temp_nfl_stats_pivot
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_pivot exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats_pivot') IS NOT NULL
-	DROP TABLE #temp_nfl_stats_pivot
+	-- Check if #temp_nfl_stats_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats_pivot') IS NOT NULL
+		DROP TABLE #temp_nfl_stats_pivot
 
 	SELECT season
 		,nfl_club_id
@@ -403,18 +399,18 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_pivot') IS NOT NULL
 	WHERE 1 = 1
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Caluclate the basic stats for Bane.
+	Caluclate the basic stats for Bane.
 
-OUTPUT TABLES:
-#temp_nfl_stats_calculated
+	OUTPUT TABLES:
+	#temp_nfl_stats_calculated
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_calculated exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats_calculated') IS NOT NULL
-	DROP TABLE #temp_nfl_stats_calculated
+	-- Check if #temp_nfl_stats_calculated exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats_calculated') IS NOT NULL
+		DROP TABLE #temp_nfl_stats_calculated
 
 	SELECT season
 		,nfl_club_id
@@ -439,18 +435,18 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_calculated') IS NOT NULL
 	FROM #temp_nfl_stats_pivot
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Unpivot the basic stats.
+	Unpivot the basic stats.
 
-OUTPUT TABLES:
-#temp_nfl_stats_unpivot
+	OUTPUT TABLES:
+	#temp_nfl_stats_unpivot
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_nfl_stats_unpivot exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_nfl_stats_unpivot') IS NOT NULL
-	DROP TABLE #temp_nfl_stats_unpivot
+	-- Check if #temp_nfl_stats_unpivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_nfl_stats_unpivot') IS NOT NULL
+		DROP TABLE #temp_nfl_stats_unpivot
 
 	SELECT nfl_club_id
 		,club
@@ -477,18 +473,18 @@ IF OBJECT_ID('tempdb..#temp_nfl_stats_unpivot') IS NOT NULL
 							)) AS me
 
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Rank the stats and write them to the table in Analytics.
+	Rank the stats and write them to the table in Analytics.
 
-OUTPUT TABLES:
-dbo.analysis_teams_statistics
+	OUTPUT TABLES:
+		bane_pro_team_stats
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-TRUNCATE TABLE Analytics.dbo.analysis_teams_statistics
+	TRUNCATE TABLE bane_pro_team_stats
 
-INSERT INTO Analytics.dbo.analysis_teams_statistics
+	INSERT INTO bane_pro_team_stats
 	SELECT nfl_club_id
 		,side_of_ball
 		,ty.id AS stat_id
@@ -499,25 +495,24 @@ INSERT INTO Analytics.dbo.analysis_teams_statistics
 			WHEN side_of_ball = 'offense' AND un.stat_type IN ('turnovers') THEN RANK() OVER (PARTITION BY side_of_ball, un.stat_type ORDER BY stat_value)
 			WHEN side_of_ball = 'offense' THEN RANK() OVER (PARTITION BY side_of_ball, un.stat_type ORDER BY stat_value DESC)
 		END AS stat_rank
+		,GETDATE() AS updated_at
 	FROM #temp_nfl_stats_unpivot un
-	INNER JOIN Analytics.dbo.map_team_statistic_type ty
+	INNER JOIN bane_team_stat_types ty
 		ON un.stat_type = ty.stat_type
 
 
-
-
-DROP TABLE #temp_nfl_stats_offense
-DROP TABLE #temp_team_games
-DROP TABLE #temp_target_games
-DROP TABLE #temp_nfl_stats_defense
-DROP TABLE #temp_nfl_stats
-DROP TABLE #temp_penalty_number_def
-DROP TABLE #temp_penalty_yards_def
-DROP TABLE #temp_penalty_number_off
-DROP TABLE #temp_penalty_yards_off
-DROP TABLE #temp_nfl_stats_pivot
-DROP TABLE #temp_nfl_stats_calculated
-DROP TABLE #temp_nfl_stats_unpivot
+	DROP TABLE #temp_nfl_stats_offense
+	DROP TABLE #temp_team_games
+	DROP TABLE #temp_target_games
+	DROP TABLE #temp_nfl_stats_defense
+	DROP TABLE #temp_nfl_stats
+	DROP TABLE #temp_penalty_number_def
+	DROP TABLE #temp_penalty_yards_def
+	DROP TABLE #temp_penalty_number_off
+	DROP TABLE #temp_penalty_yards_off
+	DROP TABLE #temp_nfl_stats_pivot
+	DROP TABLE #temp_nfl_stats_calculated
+	DROP TABLE #temp_nfl_stats_unpivot
 
 
 	PROC_END:
