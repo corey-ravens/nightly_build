@@ -1,0 +1,1255 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_UPDATE_ANALYTICS]    Script Date: 5/12/2022 11:16:04 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_bane_pro_UPDATE_ANALYTICS] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	bane_pro_UPDATE_ANALYTICS
+Author:			Corey Krawiec
+Creation Date:	10/16/2017
+Description:       
+
+	1) Blocking Stats
+	2) Run Defense Stats
+	3) Coverage Stats
+	4) Pass Rush Stats
+	5) Receiving Stats
+	6) Running Stats
+	7) Tackling Stats
+	8) Passing Stats
+	9) Special Teams Stats
+	10) Game playtimes
+	11) Gameweek status
+	12) Penalty Stats
+
+				
+Input Parameters:
+	@iSeason
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+BEGIN 
+
+
+	SET @oReturnCD = 0 
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+	
+	Blocking Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_blocking_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_blocking_stats]
+	SET player = te.player
+		,season = te.season
+		,pass_block_count = te.pass_block_count
+		,run_block_count = te.run_block_count
+		,qb_pressure_allowed_sum = te.qb_pressure_allowed_sum
+		,qb_sack_allowed_sum = te.qb_sack_allowed_sum
+		,qb_hit_allowed_sum = te.qb_hit_allowed_sum
+		,qb_hurry_allowed_sum = te.qb_hurry_allowed_sum
+		,beaten_by_defender_sum = te.beaten_by_defender_sum
+		,penalty_sum = te.penalty_sum
+		,disruption_allowed_no_beat_sum = te.disruption_allowed_no_beat_sum
+		,disruption_allowed_sum = te.disruption_allowed_sum
+		,run_block_win_sum = te.run_block_win_sum
+		,play_count_run_block_pull_sum = te.play_count_run_block_pull_sum
+		,run_block_pull_win_sum = te.run_block_pull_win_sum
+		,running_yards_created_sum = te.running_yards_created_sum
+		,run_block_loss_sum = te.run_block_loss_sum
+		,updated_at = te.updated_at
+		,play_count_lt = te.play_count_lt
+		,play_count_lg = te.play_count_lg
+		,play_count_oc = te.play_count_oc
+		,play_count_rg = te.play_count_rg
+		,play_count_rt = te.play_count_rt
+		,play_count_eligible_receiver = te.play_count_eligible_receiver
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_blocking_stats] te
+	WHERE [bane_pro_player_blocking_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_blocking_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_blocking_stats].season <> te.season
+			OR [bane_pro_player_blocking_stats].pass_block_count <> te.pass_block_count
+			OR [bane_pro_player_blocking_stats].run_block_count <> te.run_block_count
+			OR [bane_pro_player_blocking_stats].qb_pressure_allowed_sum <> te.qb_pressure_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_sack_allowed_sum <> te.qb_sack_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_hit_allowed_sum <> te.qb_hit_allowed_sum
+			OR [bane_pro_player_blocking_stats].qb_hurry_allowed_sum <> te.qb_hurry_allowed_sum
+			OR [bane_pro_player_blocking_stats].beaten_by_defender_sum <> te.beaten_by_defender_sum
+			OR [bane_pro_player_blocking_stats].penalty_sum <> te.penalty_sum
+			OR [bane_pro_player_blocking_stats].disruption_allowed_no_beat_sum <> te.disruption_allowed_no_beat_sum
+			OR [bane_pro_player_blocking_stats].disruption_allowed_sum <> te.disruption_allowed_sum
+			OR [bane_pro_player_blocking_stats].run_block_win_sum <> te.run_block_win_sum
+			OR [bane_pro_player_blocking_stats].play_count_run_block_pull_sum <> te.play_count_run_block_pull_sum
+			OR [bane_pro_player_blocking_stats].run_block_pull_win_sum <> te.run_block_pull_win_sum
+			OR [bane_pro_player_blocking_stats].running_yards_created_sum <> te.running_yards_created_sum
+			OR [bane_pro_player_blocking_stats].run_block_loss_sum <> te.run_block_loss_sum
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_lt,0) <> ISNULL(te.play_count_lt,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_lg,0) <> ISNULL(te.play_count_lg,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_oc,0) <> ISNULL(te.play_count_oc,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_rg,0) <> ISNULL(te.play_count_rg,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_rt,0) <> ISNULL(te.play_count_rt,0)
+			OR ISNULL([bane_pro_player_blocking_stats].play_count_eligible_receiver,0) <> ISNULL(te.play_count_eligible_receiver,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_blocking_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_blocking_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_blocking_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_blocking_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_blocking_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_blocking_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+	
+	Run Defense Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_run_defense_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_run_defense_stats]
+	SET player = te.player
+		,season = te.season
+		,run_defense_count = te.run_defense_count
+		,rush_yards_allowed_sum = te.rush_yards_allowed_sum
+		,rush_yards_allowed_adjusted_sum = te.rush_yards_allowed_adjusted_sum	  
+		,expected_rush_yards_allowed_sum = te.expected_rush_yards_allowed_sum
+		,rush_below_expected_allowed_sum = te.rush_below_expected_allowed_sum 
+		,rush_below_expected_allowed_adjusted_sum = te.rush_below_expected_allowed_adjusted_sum
+		,run_defense_win_sum = te.run_defense_win_sum
+		,running_yards_destroyed_sum = te.running_yards_destroyed_sum
+		,run_defense_loss_sum = te.run_defense_loss_sum
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_run_defense_stats] te
+	WHERE [bane_pro_player_run_defense_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_run_defense_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_run_defense_stats].run_defense_count <> te.run_defense_count
+		OR [bane_pro_player_run_defense_stats].rush_yards_allowed_sum <> te.rush_yards_allowed_sum
+		OR ROUND([bane_pro_player_run_defense_stats].rush_yards_allowed_adjusted_sum,1) <> ROUND(te.rush_yards_allowed_adjusted_sum,1)  
+		OR [bane_pro_player_run_defense_stats].expected_rush_yards_allowed_sum <> te.expected_rush_yards_allowed_sum
+		OR [bane_pro_player_run_defense_stats].rush_below_expected_allowed_sum <> te.rush_below_expected_allowed_sum 
+		OR [bane_pro_player_run_defense_stats].rush_below_expected_allowed_adjusted_sum <> te.rush_below_expected_allowed_adjusted_sum
+		OR [bane_pro_player_run_defense_stats].run_defense_win_sum <> te.run_defense_win_sum
+		OR ROUND([bane_pro_player_run_defense_stats].running_yards_destroyed_sum,1) <> ROUND(te.running_yards_destroyed_sum,1)
+		OR [bane_pro_player_run_defense_stats].run_defense_loss_sum <> te.run_defense_loss_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_run_defense_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_run_defense_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_run_defense_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_run_defense_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_run_defense_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_run_defense_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+	
+	Coverage Stats (as of 02/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_coverage_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_coverage_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_pass_sum = te.play_count_pass_sum
+		,play_count_press_sum = te.play_count_press_sum
+		,targeted_defender_primary_sum = te.targeted_defender_primary_sum
+		,targeted_defender_secondary_sum = te.targeted_defender_secondary_sum
+		,targeted_defender_sum = te.targeted_defender_sum
+		,responsible_for_coverage_safety_sum = te.responsible_for_coverage_safety_sum
+		,completion_allowed_sum = te.completion_allowed_sum
+		,completion_yards_allowed_sum = te.completion_yards_allowed_sum
+		,completion_allowed_brv_sum = te.completion_allowed_brv_sum
+		,completion_yards_allowed_brv_sum = te.completion_yards_allowed_brv_sum
+		,pass_break_up_brv_sum = te.pass_break_up_brv_sum
+		,pass_break_up_pff_sum = te.pass_break_up_pff_sum
+		,pass_break_up_play_on_ball_sum = te.pass_break_up_play_on_ball_sum
+		,interception_sum = te.interception_sum
+		,pass_break_up_weighted_sum = te.pass_break_up_weighted_sum
+		,yards_after_catch_above_expected_sum = te.yards_after_catch_above_expected_sum  
+		,yards_after_catch_opportunity_sum = te.yards_after_catch_opportunity_sum
+		,penalty_defensive_pass_interference_sum = te.penalty_defensive_pass_interference_sum
+		,penalty_defensive_holding_sum = te.penalty_defensive_holding_sum
+		,team_receiving_yards_allowed_on = te.team_receiving_yards_allowed_on
+		,team_rushing_yards_allowed_on = te.team_rushing_yards_allowed_on
+		,team_touchdowns_allowed_on = te.team_touchdowns_allowed_on
+		,expected_points_allowed_pff_sum = te.expected_points_allowed_pff_sum
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_coverage_stats] te
+	WHERE [bane_pro_player_coverage_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_coverage_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_coverage_stats].play_count_pass_sum <> te.play_count_pass_sum
+		OR [bane_pro_player_coverage_stats].play_count_press_sum <> te.play_count_press_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_primary_sum <> te.targeted_defender_primary_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_secondary_sum <> te.targeted_defender_secondary_sum
+		OR [bane_pro_player_coverage_stats].targeted_defender_sum <> te.targeted_defender_sum
+		OR [bane_pro_player_coverage_stats].responsible_for_coverage_safety_sum <> te.responsible_for_coverage_safety_sum
+		OR [bane_pro_player_coverage_stats].completion_allowed_sum <> te.completion_allowed_sum
+		OR [bane_pro_player_coverage_stats].completion_yards_allowed_sum <> te.completion_yards_allowed_sum
+		OR [bane_pro_player_coverage_stats].completion_allowed_brv_sum <> te.completion_allowed_brv_sum
+		OR [bane_pro_player_coverage_stats].completion_yards_allowed_brv_sum <> te.completion_yards_allowed_brv_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_brv_sum <> te.pass_break_up_brv_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_pff_sum <> te.pass_break_up_pff_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_play_on_ball_sum <> te.pass_break_up_play_on_ball_sum
+		OR [bane_pro_player_coverage_stats].interception_sum <> te.interception_sum
+		OR [bane_pro_player_coverage_stats].pass_break_up_weighted_sum <> te.pass_break_up_weighted_sum
+		OR [bane_pro_player_coverage_stats].yards_after_catch_above_expected_sum <> te.yards_after_catch_above_expected_sum
+		OR [bane_pro_player_coverage_stats].yards_after_catch_opportunity_sum <> te.yards_after_catch_opportunity_sum
+		OR ISNULL([bane_pro_player_coverage_stats].penalty_defensive_pass_interference_sum,0) <> ISNULL(te.penalty_defensive_pass_interference_sum,0)
+		OR ISNULL([bane_pro_player_coverage_stats].penalty_defensive_holding_sum,0) <> ISNULL(te.penalty_defensive_holding_sum,0)
+		OR [bane_pro_player_coverage_stats].team_receiving_yards_allowed_on <> te.team_receiving_yards_allowed_on
+		OR [bane_pro_player_coverage_stats].team_rushing_yards_allowed_on <> te.team_rushing_yards_allowed_on
+		OR [bane_pro_player_coverage_stats].team_touchdowns_allowed_on <> te.team_touchdowns_allowed_on
+		OR ABS([bane_pro_player_coverage_stats].expected_points_allowed_pff_sum - te.expected_points_allowed_pff_sum) > 0.05
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_coverage_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_coverage_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_coverage_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_coverage_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_coverage_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_coverage_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+	
+	Pass Rush Stats (as of 08/2016)
+
+    OUTPUT TABLES:            
+		bane_pro_player_pass_rush_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_pass_rush_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_pass_sum = te.play_count_pass_sum
+		,drawn_offensive_holding_sum = te.drawn_offensive_holding_sum
+		,qb_pressure_sum = te.qb_pressure_sum
+		,qb_sack_sum = te.qb_sack_sum
+		,qb_hit_sum = te.qb_hit_sum
+		,qb_hurry_sum = te.qb_hurry_sum
+		,batted_pass_sum = te.batted_pass_sum
+		,qb_disruption_sum = te.qb_disruption_sum
+		,qb_disruption_no_batted_pass_sum = te.qb_disruption_no_batted_pass_sum
+		,qb_disruption_weight_pff_sum = te.qb_disruption_weight_pff_sum
+		,qb_disruption_weight_4_sum = te.qb_disruption_weight_4_sum
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_pass_rush_stats] te
+	WHERE [bane_pro_player_pass_rush_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_pass_rush_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_pass_rush_stats].play_count_pass_sum <> te.play_count_pass_sum
+		OR ISNULL([bane_pro_player_pass_rush_stats].drawn_offensive_holding_sum,0) <> ISNULL(te.drawn_offensive_holding_sum,0)
+		OR [bane_pro_player_pass_rush_stats].qb_pressure_sum <> te.qb_pressure_sum
+		OR [bane_pro_player_pass_rush_stats].qb_sack_sum <> te.qb_sack_sum
+		OR [bane_pro_player_pass_rush_stats].qb_hit_sum <> te.qb_hit_sum
+		OR [bane_pro_player_pass_rush_stats].qb_hurry_sum <> te.qb_hurry_sum
+		OR [bane_pro_player_pass_rush_stats].batted_pass_sum <> te.batted_pass_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_sum <> te.qb_disruption_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_no_batted_pass_sum <> te.qb_disruption_no_batted_pass_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_weight_pff_sum <> te.qb_disruption_weight_pff_sum
+		OR [bane_pro_player_pass_rush_stats].qb_disruption_weight_4_sum <> te.qb_disruption_weight_4_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_pass_rush_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_pass_rush_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_pass_rush_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_pass_rush_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_pass_rush_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_pass_rush_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+	
+	Receiving Stats
+
+    OUTPUT TABLES:            
+		bane_pro_player_receiving_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_receiving_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_route_sum = te.play_count_route_sum
+		,play_count_pressed_sum = te.play_count_pressed_sum
+		,target_sum = te.target_sum
+		,catchable_target_sum = te.catchable_target_sum
+		,drop_sum = te.drop_sum
+		,reception_sum = te.reception_sum
+		,receiving_yards_sum = te.receiving_yards_sum
+		,receiving_yards_after_catch_sum = te.receiving_yards_after_catch_sum
+		,receiving_yards_after_contact_sum = te.receiving_yards_after_contact_sum
+		,receiving_fumble = te.receiving_fumble
+		,receiving_touchdown_sum = te.receiving_touchdown_sum
+		,receiving_tackle_avoided_sum = te.receiving_tackle_avoided_sum
+		,receiving_interception_sum = te.receiving_interception_sum
+		,receiving_yards_adjusted_sum = te.receiving_yards_adjusted_sum
+		,receiving_yards_adjusted_with_int_sum = te.receiving_yards_adjusted_with_int_sum
+		,penalty_yards_drawn_sum = te.penalty_yards_drawn_sum
+		,catch_probability_target_sum = te.catch_probability_target_sum
+		,catch_probability_sum = te.catch_probability_sum
+		,receiving_epa_target_sum = te.receiving_epa_target_sum
+		,receiving_epa_sum = te.receiving_epa_sum
+		,receiving_air_yards_sum = te.receiving_air_yards_sum
+		,catch_probability_derrick_target_sum = te.catch_probability_derrick_target_sum
+		,catch_probability_derrick_sum = te.catch_probability_derrick_sum
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_receiving_stats] te
+	WHERE [bane_pro_player_receiving_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_receiving_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_receiving_stats].play_count_route_sum <> te.play_count_route_sum
+		 OR [bane_pro_player_receiving_stats].play_count_pressed_sum <> te.play_count_pressed_sum
+		 OR [bane_pro_player_receiving_stats].target_sum <> te.target_sum
+		 OR [bane_pro_player_receiving_stats].catchable_target_sum <> te.catchable_target_sum
+		 OR [bane_pro_player_receiving_stats].drop_sum <> te.drop_sum
+		 OR [bane_pro_player_receiving_stats].reception_sum <> te.reception_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_sum <> te.receiving_yards_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_after_catch_sum <> te.receiving_yards_after_catch_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_after_contact_sum <> te.receiving_yards_after_contact_sum
+		 OR [bane_pro_player_receiving_stats].receiving_fumble <> te.receiving_fumble
+		 OR [bane_pro_player_receiving_stats].receiving_touchdown_sum <> te.receiving_touchdown_sum
+		 OR [bane_pro_player_receiving_stats].receiving_tackle_avoided_sum <> te.receiving_tackle_avoided_sum
+		 OR [bane_pro_player_receiving_stats].receiving_interception_sum <> te.receiving_interception_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_adjusted_sum <> te.receiving_yards_adjusted_sum
+		 OR [bane_pro_player_receiving_stats].receiving_yards_adjusted_with_int_sum <> te.receiving_yards_adjusted_with_int_sum
+		 OR ISNULL([bane_pro_player_receiving_stats].penalty_yards_drawn_sum,0) <> ISNULL(te.penalty_yards_drawn_sum,0)
+		 OR [bane_pro_player_receiving_stats].catch_probability_target_sum <> te.catch_probability_target_sum
+		 OR ROUND([bane_pro_player_receiving_stats].catch_probability_sum,1) <> ROUND(te.catch_probability_sum,1)
+		 OR [bane_pro_player_receiving_stats].receiving_epa_target_sum <> te.receiving_epa_target_sum
+		 OR ABS(ISNULL([bane_pro_player_receiving_stats].receiving_epa_sum,0) - ISNULL(te.receiving_epa_sum,0)) > 0.05
+		 OR [bane_pro_player_receiving_stats].receiving_air_yards_sum <> te.receiving_air_yards_sum
+		 OR [bane_pro_player_receiving_stats].catch_probability_derrick_target_sum <> te.catch_probability_derrick_target_sum
+		 OR ROUND([bane_pro_player_receiving_stats].catch_probability_derrick_sum,1) <> ROUND(te.catch_probability_derrick_sum,1)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_receiving_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_receiving_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_receiving_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_receiving_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_receiving_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_receiving_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+	
+	Running Stats (as of 10/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_running_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_running_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_run_sum = te.play_count_run_sum
+		,run_sum = te.run_sum
+		,run_no_2pt_sum = te.run_no_2pt_sum
+		,run_no_goal_sum = te.run_no_goal_sum
+		,run_goal_sum = te.run_goal_sum
+		,run_short_sum = te.run_short_sum
+		,run_expected_sum = te.run_expected_sum
+		,running_yards_sum = te.running_yards_sum
+		,running_yards_no_2pt_sum = te.running_yards_no_2pt_sum
+		,running_yards_no_goal_sum = te.running_yards_no_goal_sum
+		,running_yards_goal_sum = te.running_yards_goal_sum
+		,running_yards_short_sum = te.running_yards_short_sum
+		,running_yards_expected_sum = te.running_yards_expected_sum
+		,expected_running_yards_sum = te.expected_running_yards_sum
+		,running_yards_after_contact_sum = te.running_yards_after_contact_sum
+		,running_yards_after_contact_no_2pt_sum = te.running_yards_after_contact_no_2pt_sum
+		,running_yards_after_contact_no_goal_sum = te.running_yards_after_contact_no_goal_sum
+		,running_tackle_avoided_sum = te.running_tackle_avoided_sum
+		,running_tackle_avoided_no_2pt_sum = te.running_tackle_avoided_no_2pt_sum
+		,running_tackle_avoided_no_goal_sum = te.running_tackle_avoided_no_goal_sum
+		,running_td_goal_sum = te.running_td_goal_sum
+		,running_success_short_sum = te.running_success_short_sum
+		,running_yards_adjusted_sum = te.running_yards_adjusted_sum
+		,running_fumble_sum = te.running_fumble_sum
+		,running_touchdown_sum = te.running_touchdown_sum
+		,running_poa_change = te.running_poa_change
+		,running_poa_change_voluntary = te.running_poa_change_voluntary
+		,running_poa_change_success = te.running_poa_change_success
+		,running_poa_change_above_expected = te.running_poa_change_above_expected
+		,running_epa_attempt_sum = te.running_epa_attempt_sum
+		,running_epa_sum = te.running_epa_sum
+		,running_success_sum = te.running_success_sum
+		,updated_at = te.updated_at
+		,scrambles = te.scrambles
+		,scrambling_yards = te.scrambling_yards
+		,scrambling_tackles_avoided = te.scrambling_tackles_avoided
+		,scrambling_epa_attempts = te.scrambling_epa_attempts
+		,scrambling_epa = te.scrambling_epa
+		,scrambling_successes = te.scrambling_successes
+		,scrambling_touchdowns = te.scrambling_touchdowns
+		,scrambling_fumbles = te.scrambling_fumbles
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_running_stats] te
+	WHERE [bane_pro_player_running_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_running_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_running_stats].play_count_run_sum <> te.play_count_run_sum
+		OR [bane_pro_player_running_stats].run_sum <> te.run_sum
+		OR [bane_pro_player_running_stats].run_no_2pt_sum <> te.run_no_2pt_sum
+		OR [bane_pro_player_running_stats].run_no_goal_sum <> te.run_no_goal_sum
+		OR [bane_pro_player_running_stats].run_goal_sum <> te.run_goal_sum
+		OR [bane_pro_player_running_stats].run_short_sum <> te.run_short_sum
+		OR [bane_pro_player_running_stats].run_expected_sum <> te.run_expected_sum
+		OR [bane_pro_player_running_stats].running_yards_sum <> te.running_yards_sum
+		OR [bane_pro_player_running_stats].running_yards_no_2pt_sum <> te.running_yards_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_yards_no_goal_sum <> te.running_yards_no_goal_sum
+		OR [bane_pro_player_running_stats].running_yards_goal_sum <> te.running_yards_goal_sum
+		OR [bane_pro_player_running_stats].running_yards_short_sum <> te.running_yards_short_sum
+		OR [bane_pro_player_running_stats].running_yards_expected_sum <> te.running_yards_expected_sum
+		OR ROUND([bane_pro_player_running_stats].expected_running_yards_sum,1) <> ROUND(te.expected_running_yards_sum,1)
+		OR [bane_pro_player_running_stats].running_yards_after_contact_sum <> te.running_yards_after_contact_sum
+		OR [bane_pro_player_running_stats].running_yards_after_contact_no_2pt_sum <> te.running_yards_after_contact_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_yards_after_contact_no_goal_sum <> te.running_yards_after_contact_no_goal_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_sum <> te.running_tackle_avoided_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_no_2pt_sum <> te.running_tackle_avoided_no_2pt_sum
+		OR [bane_pro_player_running_stats].running_tackle_avoided_no_goal_sum <> te.running_tackle_avoided_no_goal_sum
+		OR [bane_pro_player_running_stats].running_td_goal_sum <> te.running_td_goal_sum
+		OR [bane_pro_player_running_stats].running_success_short_sum <> te.running_success_short_sum
+		OR ISNULL([bane_pro_player_running_stats].running_yards_adjusted_sum,0) <> ISNULL(te.running_yards_adjusted_sum,0)
+		OR [bane_pro_player_running_stats].running_fumble_sum <> te.running_fumble_sum
+		OR [bane_pro_player_running_stats].running_touchdown_sum <> te.running_touchdown_sum
+		OR [bane_pro_player_running_stats].running_poa_change <> te.running_poa_change
+		OR [bane_pro_player_running_stats].running_poa_change_voluntary <> te.running_poa_change_voluntary
+		OR [bane_pro_player_running_stats].running_poa_change_success <> te.running_poa_change_success
+		OR [bane_pro_player_running_stats].running_poa_change_above_expected <> te.running_poa_change_above_expected
+		OR [bane_pro_player_running_stats].running_epa_attempt_sum <> te.running_epa_attempt_sum
+		OR ABS(ISNULL([bane_pro_player_running_stats].running_epa_sum,0) - ISNULL(te.running_epa_sum,0)) > 0.05
+		OR [bane_pro_player_running_stats].running_success_sum <> te.running_success_sum
+		OR ISNULL([bane_pro_player_running_stats].scrambles,0) <> ISNULL(te.scrambles,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_yards,0) <> ISNULL(te.scrambling_yards,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_tackles_avoided,0) <> ISNULL(te.scrambling_tackles_avoided,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_epa_attempts,0) <> ISNULL(te.scrambling_epa_attempts,0)
+		OR ABS(ISNULL([bane_pro_player_running_stats].scrambling_epa,0) - ISNULL(te.scrambling_epa,0)) > 0.05
+		OR ISNULL([bane_pro_player_running_stats].scrambling_successes,0) <> ISNULL(te.scrambling_successes,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_touchdowns,0) <> ISNULL(te.scrambling_touchdowns,0)
+		OR ISNULL([bane_pro_player_running_stats].scrambling_fumbles,0) <> ISNULL(te.scrambling_fumbles,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_running_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_running_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_running_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_running_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_running_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_running_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+	
+	Tackling Stats (as of 08/2016)
+
+    OUTPUT TABLES:            
+		bane_pro_player_tackling_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_tackling_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,tackle_sum = te.tackle_sum
+		,assist_sum = te.assist_sum
+		,tackle_assist_sum = te.tackle_assist_sum
+		,run_tackle_sum = te.run_tackle_sum
+		,tackle_4_way_sum = te.tackle_4_way_sum
+		,tackle_probability_sum = te.tackle_probability_sum
+		,tackle_probability_derrick_sum = te.tackle_probability_derrick_sum
+		,stop_pff_sum = te.stop_pff_sum
+		,stop_brv_sum = te.stop_brv_sum
+		,run_stop_pff_sum = te.run_stop_pff_sum
+		,run_stop_brv_sum = te.run_stop_brv_sum
+		,fumble_forced_sum = te.fumble_forced_sum
+		,tackle_for_loss_sum = te.tackle_for_loss_sum
+		,updated_at = te.updated_at
+		,defensive_touchdowns = te.defensive_touchdowns
+		,missed_tackles = te.missed_tackles
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_tackling_stats] te
+	WHERE [bane_pro_player_tackling_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_tackling_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_tackling_stats].play_count_sum <> te.play_count_sum
+		OR [bane_pro_player_tackling_stats].tackle_sum <> te.tackle_sum
+		OR [bane_pro_player_tackling_stats].assist_sum <> te.assist_sum
+		OR [bane_pro_player_tackling_stats].tackle_assist_sum <> te.tackle_assist_sum
+		OR [bane_pro_player_tackling_stats].run_tackle_sum <> te.run_tackle_sum
+		OR [bane_pro_player_tackling_stats].tackle_4_way_sum <> te.tackle_4_way_sum
+		OR ROUND([bane_pro_player_tackling_stats].tackle_probability_sum,1) <> ROUND(te.tackle_probability_sum,1)
+		OR ROUND([bane_pro_player_tackling_stats].tackle_probability_derrick_sum,1) <> ROUND(te.tackle_probability_derrick_sum,1)
+		OR [bane_pro_player_tackling_stats].stop_pff_sum <> te.stop_pff_sum
+		OR [bane_pro_player_tackling_stats].stop_brv_sum <> te.stop_brv_sum
+		OR [bane_pro_player_tackling_stats].run_stop_pff_sum <> te.run_stop_pff_sum
+		OR [bane_pro_player_tackling_stats].run_stop_brv_sum <> te.run_stop_brv_sum
+		OR [bane_pro_player_tackling_stats].fumble_forced_sum <> te.fumble_forced_sum
+		OR [bane_pro_player_tackling_stats].tackle_for_loss_sum <> te.tackle_for_loss_sum
+		OR ISNULL([bane_pro_player_tackling_stats].defensive_touchdowns,0) <> ISNULL(te.defensive_touchdowns,0)
+		OR ISNULL([bane_pro_player_tackling_stats].missed_tackles,0) <> ISNULL(te.missed_tackles,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_tackling_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_tackling_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_tackling_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_tackling_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_tackling_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_tackling_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)
+
+	
+	Passing Stats (as of 11/2017)
+
+    OUTPUT TABLES:            
+		bane_pro_player_passing_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_passing_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,pass_play_sum = te.pass_play_sum
+		,quarterback_sum = te.quarterback_sum
+		,passer_sum = te.passer_sum
+		,pumpfake_sum = te.pumpfake_sum
+		,passing_attempt_sum = te.passing_attempt_sum
+		,passing_attempt_no_throw_aways_sum = te.passing_attempt_no_throw_aways_sum
+		,passing_attempt_throw_sum = te.passing_attempt_throw_sum
+		,passing_completion_sum = te.passing_completion_sum
+		,passing_yards_sum = te.passing_yards_sum
+		,passing_penalty_yards_drawn_sum = te.passing_penalty_yards_drawn_sum
+		,passing_drop_sum = te.passing_drop_sum
+		,passing_drop_yards_sum = te.passing_drop_yards_sum
+		,passing_air_yards_sum = te.passing_air_yards_sum
+		,passing_touchdown_sum = te.passing_touchdown_sum
+		,passing_dropped_touchdown_sum = te.passing_dropped_touchdown_sum
+		,passing_interception_sum = te.passing_interception_sum
+		,passing_dropped_interception_sum = te.passing_dropped_interception_sum
+		,passing_sack_sum = te.passing_sack_sum
+		,passing_sack_yards_sum = te.passing_sack_yards_sum
+		,passing_fumble_sum = te.passing_fumble_sum
+		,passing_batted_pass_sum = te.passing_batted_pass_sum
+		,passing_catch_probability_attempt_sum = te.passing_catch_probability_attempt_sum
+		,passing_catch_probability_sum = te.passing_catch_probability_sum
+		,passing_catch_probability_completion_sum = te.passing_catch_probability_completion_sum
+		,passing_epa_attempt_sum = te.passing_epa_attempt_sum
+		,passing_epa_sum = te.passing_epa_sum
+		,passing_catch_probability_derrick_attempt_sum = te.passing_catch_probability_derrick_attempt_sum
+		,passing_catch_probability_derrick_sum = te.passing_catch_probability_derrick_sum
+		,passing_catch_probability_derrick_completion_sum = te.passing_catch_probability_derrick_completion_sum
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_passing_stats] te
+	WHERE [bane_pro_player_passing_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_passing_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_passing_stats].play_count_sum <> te.play_count_sum
+		OR [bane_pro_player_passing_stats].pass_play_sum <> te.pass_play_sum
+		OR [bane_pro_player_passing_stats].quarterback_sum <> te.quarterback_sum
+		OR [bane_pro_player_passing_stats].passer_sum <> te.passer_sum
+		OR [bane_pro_player_passing_stats].pumpfake_sum <> te.pumpfake_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_sum <> te.passing_attempt_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_no_throw_aways_sum <> te.passing_attempt_no_throw_aways_sum
+		OR [bane_pro_player_passing_stats].passing_attempt_throw_sum <> te.passing_attempt_throw_sum
+		OR [bane_pro_player_passing_stats].passing_completion_sum <> te.passing_completion_sum
+		OR [bane_pro_player_passing_stats].passing_yards_sum <> te.passing_yards_sum
+		OR [bane_pro_player_passing_stats].passing_penalty_yards_drawn_sum <> te.passing_penalty_yards_drawn_sum
+		OR [bane_pro_player_passing_stats].passing_drop_sum <> te.passing_drop_sum
+		OR [bane_pro_player_passing_stats].passing_drop_yards_sum <> te.passing_drop_yards_sum
+		OR [bane_pro_player_passing_stats].passing_air_yards_sum <> te.passing_air_yards_sum
+		OR [bane_pro_player_passing_stats].passing_touchdown_sum <> te.passing_touchdown_sum
+		OR [bane_pro_player_passing_stats].passing_dropped_touchdown_sum <> te.passing_dropped_touchdown_sum
+		OR [bane_pro_player_passing_stats].passing_interception_sum <> te.passing_interception_sum
+		OR [bane_pro_player_passing_stats].passing_dropped_interception_sum <> te.passing_dropped_interception_sum
+		OR [bane_pro_player_passing_stats].passing_sack_sum <> te.passing_sack_sum
+		OR [bane_pro_player_passing_stats].passing_sack_yards_sum <> te.passing_sack_yards_sum
+		OR [bane_pro_player_passing_stats].passing_fumble_sum <> te.passing_fumble_sum
+		OR [bane_pro_player_passing_stats].passing_batted_pass_sum <> te.passing_batted_pass_sum
+		OR [bane_pro_player_passing_stats].passing_catch_probability_attempt_sum <> te.passing_catch_probability_attempt_sum
+		OR ROUND([bane_pro_player_passing_stats].passing_catch_probability_sum,1) <> ROUND(te.passing_catch_probability_sum,1)
+		OR [bane_pro_player_passing_stats].passing_catch_probability_completion_sum <> te.passing_catch_probability_completion_sum
+		OR [bane_pro_player_passing_stats].passing_epa_attempt_sum <> te.passing_epa_attempt_sum
+		OR ABS(ISNULL([bane_pro_player_passing_stats].passing_epa_sum,0) - ISNULL(te.passing_epa_sum,0)) > 0.05
+		OR [bane_pro_player_passing_stats].passing_catch_probability_derrick_attempt_sum <> te.passing_catch_probability_derrick_attempt_sum
+		OR ROUND([bane_pro_player_passing_stats].passing_catch_probability_derrick_sum,1) <> ROUND(te.passing_catch_probability_derrick_sum,1)
+		OR [bane_pro_player_passing_stats].passing_catch_probability_derrick_completion_sum <> te.passing_catch_probability_derrick_completion_sum
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_passing_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_passing_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_passing_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_passing_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_passing_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_passing_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+	
+	Special Teams Stats (as of 09/2021)
+
+    OUTPUT TABLES:            
+		bane_pro_player_special_teams_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_special_teams_stats]
+	SET player = te.player
+		,season = te.season
+		,play_count_sum = te.play_count_sum
+		,kick_attempts = te.kick_attempts
+		,kick_makes = te.kick_makes
+		,kick_blocks = te.kick_blocks
+		,field_goal_attempts = te.field_goal_attempts
+		,field_goal_makes = te.field_goal_makes
+		,field_goal_blocks = te.field_goal_blocks
+		,extra_point_attempts = te.extra_point_attempts
+		,extra_point_makes = te.extra_point_makes
+		,extra_point_blocks = te.extra_point_blocks
+		,attempts_0_19 = te.attempts_0_19
+		,attempts_20_29 = te.attempts_20_29
+		,attempts_30_39 = te.attempts_30_39
+		,attempts_40_49 = te.attempts_40_49
+		,attempts_50_59 = te.attempts_50_59
+		,attempts_60_plus = te.attempts_60_plus
+		,makes_0_19 = te.makes_0_19
+		,makes_20_29 = te.makes_20_29
+		,makes_30_39 = te.makes_30_39
+		,makes_40_49 = te.makes_40_49
+		,makes_50_59 = te.makes_50_59
+		,makes_60_plus = te.makes_60_plus
+		,punt_attempts = te.punt_attempts
+		,punt_gross_yards_sum = te.punt_gross_yards_sum
+		,punt_net_yards_sum = te.punt_net_yards_sum
+		,punts_inside_20 = te.punts_inside_20
+		,punts_inside_10 = te.punts_inside_10
+		,punt_touchbacks = te.punt_touchbacks
+		,punt_fair_catches = te.punt_fair_catches
+		,punt_return_attempt = te.punt_return_attempt
+		,punt_return_yards_sum = te.punt_return_yards_sum
+		,punt_return_fair_catches = te.punt_return_fair_catches
+		,punt_return_touchdowns = te.punt_return_touchdowns
+		,kickoff_attempts = te.kickoff_attempts
+		,kickoffs_returned = te.kickoffs_returned
+		,kickoff_touchbacks = te.kickoff_touchbacks
+		,kickoff_return_yards_allowed_sum = te.kickoff_return_yards_allowed_sum
+		,kickoff_return_attempts = te.kickoff_return_attempts
+		,kickoff_return_yards_sum = te.kickoff_return_yards_sum
+		,kickoff_return_touchdowns = te.kickoff_return_touchdowns
+		,kickoff_tackles = te.kickoff_tackles
+		,kickoff_assists = te.kickoff_assists
+		,kickoff_missed_tackles = te.kickoff_missed_tackles
+		,punt_tackles = te.punt_tackles
+		,punt_assists = te.punt_assists
+		,punt_missed_tackles = te.punt_missed_tackles
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_special_teams_stats] te
+	WHERE [bane_pro_player_special_teams_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_special_teams_stats].gsis_game_key = te.gsis_game_key
+		AND (ISNULL([bane_pro_player_special_teams_stats].play_count_sum,0) <> ISNULL(te.play_count_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kick_attempts,0) <> ISNULL(te.kick_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kick_makes,0) <> ISNULL(te.kick_makes,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kick_blocks,0) <> ISNULL(te.kick_blocks,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].field_goal_attempts,0) <> ISNULL(te.field_goal_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].field_goal_makes,0) <> ISNULL(te.field_goal_makes,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].field_goal_blocks,0) <> ISNULL(te.field_goal_blocks,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].extra_point_attempts,0) <> ISNULL(te.extra_point_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].extra_point_makes,0) <> ISNULL(te.extra_point_makes,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].extra_point_blocks,0) <> ISNULL(te.extra_point_blocks,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_0_19,0) <> ISNULL(te.attempts_0_19,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_20_29,0) <> ISNULL(te.attempts_20_29,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_30_39,0) <> ISNULL(te.attempts_30_39,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_40_49,0) <> ISNULL(te.attempts_40_49,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_50_59,0) <> ISNULL(te.attempts_50_59,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].attempts_60_plus,0) <> ISNULL(te.attempts_60_plus,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_0_19,0) <> ISNULL(te.makes_0_19,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_20_29,0) <> ISNULL(te.makes_20_29,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_30_39,0) <> ISNULL(te.makes_30_39,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_40_49,0) <> ISNULL(te.makes_40_49,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_50_59,0) <> ISNULL(te.makes_50_59,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].makes_60_plus,0) <> ISNULL(te.makes_60_plus,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_attempts,0) <> ISNULL(te.punt_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_gross_yards_sum,0) <> ISNULL(te.punt_gross_yards_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_net_yards_sum,0) <> ISNULL(te.punt_net_yards_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punts_inside_20,0) <> ISNULL(te.punts_inside_20,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punts_inside_10,0) <> ISNULL(te.punts_inside_10,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_touchbacks,0) <> ISNULL(te.punt_touchbacks,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_fair_catches,0) <> ISNULL(te.punt_fair_catches,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_return_attempt,0) <> ISNULL(te.punt_return_attempt,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_return_yards_sum,0) <> ISNULL(te.punt_return_yards_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_return_fair_catches,0) <> ISNULL(te.punt_return_fair_catches,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_return_touchdowns,0) <> ISNULL(te.punt_return_touchdowns,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_attempts,0) <> ISNULL(te.kickoff_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoffs_returned,0) <> ISNULL(te.kickoffs_returned,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_touchbacks,0) <> ISNULL(te.kickoff_touchbacks,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_return_yards_allowed_sum,0) <> ISNULL(te.kickoff_return_yards_allowed_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_return_attempts,0) <> ISNULL(te.kickoff_return_attempts,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_return_yards_sum,0) <> ISNULL(te.kickoff_return_yards_sum,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_return_touchdowns,0) <> ISNULL(te.kickoff_return_touchdowns,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_tackles,0) <> ISNULL(te.kickoff_tackles,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_assists,0) <> ISNULL(te.kickoff_assists,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].kickoff_missed_tackles,0) <> ISNULL(te.kickoff_missed_tackles,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_tackles,0) <> ISNULL(te.punt_tackles,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_assists,0) <> ISNULL(te.punt_assists,0)
+		OR ISNULL([bane_pro_player_special_teams_stats].punt_missed_tackles,0) <> ISNULL(te.punt_missed_tackles,0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_special_teams_stats]
+	SELECT te.nfl_player_id
+		,te.player
+		,te.season
+		,te.gsis_game_key
+		,te.play_count_sum
+		,te.kick_attempts
+		,te.kick_makes
+		,te.kick_blocks
+		,te.field_goal_attempts
+		,te.field_goal_makes
+		,te.field_goal_blocks
+		,te.extra_point_attempts
+		,te.extra_point_makes
+		,te.extra_point_blocks
+		,te.attempts_0_19
+		,te.attempts_20_29
+		,te.attempts_30_39
+		,te.attempts_40_49
+		,te.attempts_50_59
+		,te.attempts_60_plus
+		,te.makes_0_19
+		,te.makes_20_29
+		,te.makes_30_39
+		,te.makes_40_49
+		,te.makes_50_59
+		,te.makes_60_plus
+		,te.punt_attempts
+		,te.punt_gross_yards_sum
+		,te.punt_net_yards_sum
+		,te.punts_inside_20
+		,te.punts_inside_10
+		,te.punt_touchbacks
+		,te.punt_fair_catches
+		,te.punt_return_attempt
+		,te.punt_return_yards_sum
+		,te.punt_return_fair_catches
+		,te.punt_return_touchdowns
+		,te.kickoff_attempts
+		,te.kickoffs_returned
+		,te.kickoff_touchbacks
+		,te.kickoff_return_yards_allowed_sum
+		,te.kickoff_return_attempts
+		,te.kickoff_return_yards_sum
+		,te.kickoff_return_touchdowns
+		,te.updated_at
+		,te.kickoff_tackles
+		,te.kickoff_assists
+		,te.kickoff_missed_tackles
+		,te.punt_tackles
+		,te.punt_assists
+		,te.punt_missed_tackles
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_special_teams_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_special_teams_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_special_teams_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_special_teams_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_special_teams_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(10)
+
+	
+	Game playtimes
+
+    OUTPUT TABLES:            
+		bane_pro_player_game_playtimes
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_game_playtimes]
+	SET snap_count_offense = te.snap_count_offense
+		,snap_count_offense_team = te.snap_count_offense_team
+		,snap_count_defense = te.snap_count_defense
+		,snap_count_defense_team = te.snap_count_defense_team
+		,snap_count_special_teams = te.snap_count_special_teams
+		,snap_count_special_teams_team = te.snap_count_special_teams_team
+		,snap_count_4_phase_team = te.snap_count_4_phase_team
+		,snap_count_special_teams_weighted = te.snap_count_special_teams_weighted
+		,snap_count_special_teams_weighted_team = te.snap_count_special_teams_weighted_team
+		,snap_count_4_phase = te.snap_count_4_phase
+		,snap_count_all = te.snap_count_all
+		,snap_count_od = te.snap_count_od
+		,snap_count_weighted = te.snap_count_weighted
+		,equivalent_games_no_weight = te.equivalent_games_no_weight
+		,equivalent_games = te.equivalent_games
+		,equivalent_games_off_def = te.equivalent_games_off_def
+		,snap_count_offense_no_garbage = te.snap_count_offense_no_garbage
+		,snap_count_offense_no_garbage_team = te.snap_count_offense_no_garbage_team
+		,snap_count_defense_no_garbage = te.snap_count_defense_no_garbage
+		,snap_count_defense_no_garbage_team = te.snap_count_defense_no_garbage_team
+		,snap_count_4_phase_no_garbage = te.snap_count_4_phase_no_garbage
+		,snap_count_4_phase_no_garbage_team = te.snap_count_4_phase_no_garbage_team
+		,snap_count_offense_no_garbage_inj_team = te.snap_count_offense_no_garbage_inj_team
+		,snap_count_defense_no_garbage_inj_team = te.snap_count_defense_no_garbage_inj_team
+		,snap_count_4_phase_no_garbage_inj_team = te.snap_count_4_phase_no_garbage_inj_team
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_game_playtimes] te
+	WHERE [bane_pro_player_game_playtimes].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_game_playtimes].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_game_playtimes].snap_count_offense <> te.snap_count_offense
+		OR [bane_pro_player_game_playtimes].snap_count_offense_team <> te.snap_count_offense_team
+		OR [bane_pro_player_game_playtimes].snap_count_defense <> te.snap_count_defense
+		OR [bane_pro_player_game_playtimes].snap_count_defense_team <> te.snap_count_defense_team
+		OR [bane_pro_player_game_playtimes].snap_count_special_teams <> te.snap_count_special_teams
+		OR [bane_pro_player_game_playtimes].snap_count_special_teams_team <> te.snap_count_special_teams_team
+		OR [bane_pro_player_game_playtimes].snap_count_4_phase_team <> te.snap_count_4_phase_team
+		OR ABS([bane_pro_player_game_playtimes].snap_count_special_teams_weighted - te.snap_count_special_teams_weighted) > 0.5
+		OR ABS([bane_pro_player_game_playtimes].snap_count_special_teams_weighted_team - te.snap_count_special_teams_weighted_team) > 0.5
+		OR [bane_pro_player_game_playtimes].snap_count_4_phase <> te.snap_count_4_phase
+		OR [bane_pro_player_game_playtimes].snap_count_all <> te.snap_count_all
+		OR [bane_pro_player_game_playtimes].snap_count_od <> te.snap_count_od
+		OR ABS([bane_pro_player_game_playtimes].snap_count_weighted - te.snap_count_weighted) > 0.5
+		OR ABS([bane_pro_player_game_playtimes].equivalent_games_no_weight - te.equivalent_games_no_weight) > 0.5
+		OR ABS([bane_pro_player_game_playtimes].equivalent_games - te.equivalent_games) > 0.5
+		OR ABS([bane_pro_player_game_playtimes].equivalent_games_off_def - te.equivalent_games_off_def) > 0.5
+		OR [bane_pro_player_game_playtimes].snap_count_offense_no_garbage <> te.snap_count_offense_no_garbage
+		OR [bane_pro_player_game_playtimes].snap_count_offense_no_garbage_team <> te.snap_count_offense_no_garbage_team
+		OR [bane_pro_player_game_playtimes].snap_count_defense_no_garbage <> te.snap_count_defense_no_garbage
+		OR [bane_pro_player_game_playtimes].snap_count_defense_no_garbage_team <> te.snap_count_defense_no_garbage_team
+		OR [bane_pro_player_game_playtimes].snap_count_4_phase_no_garbage <> te.snap_count_4_phase_no_garbage
+		OR [bane_pro_player_game_playtimes].snap_count_4_phase_no_garbage_team <> te.snap_count_4_phase_no_garbage_team
+		OR [bane_pro_player_game_playtimes].snap_count_offense_no_garbage_inj_team <> te.snap_count_offense_no_garbage_inj_team
+		OR [bane_pro_player_game_playtimes].snap_count_defense_no_garbage_inj_team <> te.snap_count_defense_no_garbage_inj_team
+		OR [bane_pro_player_game_playtimes].snap_count_4_phase_no_garbage_inj_team <> te.snap_count_4_phase_no_garbage_inj_team
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_game_playtimes]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_game_playtimes] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_game_playtimes] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_game_playtimes]
+	FROM [Analytics].[dbo].[bane_pro_player_game_playtimes] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_game_playtimes] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)
+
+	
+	Gameweek statuses
+
+    OUTPUT TABLES:            
+		bane_pro_player_gameweek_statuses
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_gameweek_statuses]
+	SET [nfl_game_week_begin] = te.[nfl_game_week_begin]
+		,[nfl_game_week_end] = te.[nfl_game_week_end]
+		,[team_week_begin] = te.[team_week_begin]
+		,[team_week_end] = te.[team_week_end]
+		,[status_start_date] = te.[status_start_date]
+		,[status_end_date] = te.[status_end_date] 
+		,[status_roster_simple] = te.[status_roster_simple]
+		,[injury_status_week] = te.[injury_status_week]
+		,[injury_text_week] = te.[injury_text_week]
+		,[practices_missed] = te.[practices_missed]
+		,[game_datetime] = te.[game_datetime]
+		,[status_game_played] = te.[status_game_played]
+		,[nfl_game_key] = te.[nfl_game_key]
+		,[nfl_club_id] = te.[nfl_club_id]
+		,[active_game_count] = te.[active_game_count]
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_gameweek_statuses] te
+	WHERE [bane_pro_player_gameweek_statuses].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_gameweek_statuses].season = te.season
+		AND [bane_pro_player_gameweek_statuses].season_type = te.season_type
+		AND [bane_pro_player_gameweek_statuses].[week] = te.[week]
+		AND ([bane_pro_player_gameweek_statuses].[nfl_game_week_begin] <> te.[nfl_game_week_begin]
+		OR [bane_pro_player_gameweek_statuses].[nfl_game_week_end] <> te.[nfl_game_week_end]
+		OR [bane_pro_player_gameweek_statuses].[team_week_begin] <> te.[team_week_begin]
+		OR [bane_pro_player_gameweek_statuses].[team_week_end] <> te.[team_week_end]
+		OR [bane_pro_player_gameweek_statuses].[status_start_date] <> te.[status_start_date]
+		OR [bane_pro_player_gameweek_statuses].[status_end_date] <> te.[status_end_date] 
+		OR [bane_pro_player_gameweek_statuses].[status_roster_simple] <> te.[status_roster_simple]
+		OR ISNULL([bane_pro_player_gameweek_statuses].[injury_status_week],'') <>  ISNULL(te.[injury_status_week],'')
+		OR ISNULL([bane_pro_player_gameweek_statuses].[injury_text_week],'') <>  ISNULL(te.[injury_text_week],'')
+		OR ISNULL([bane_pro_player_gameweek_statuses].[practices_missed],0) <>  ISNULL(te.[practices_missed],0)
+		OR ISNULL([bane_pro_player_gameweek_statuses].[game_datetime],'01/01/1901') <> ISNULL(te.[game_datetime],'01/01/1901')
+		OR ISNULL([bane_pro_player_gameweek_statuses].[status_game_played],'') <> ISNULL(te.[status_game_played],'')
+		OR ISNULL([bane_pro_player_gameweek_statuses].[nfl_game_key],0) <> ISNULL(te.[nfl_game_key],0)
+		OR ISNULL([bane_pro_player_gameweek_statuses].[nfl_club_id],0) <> ISNULL(te.[nfl_club_id],0)
+		OR ISNULL([bane_pro_player_gameweek_statuses].[active_game_count],0) <> ISNULL(te.[active_game_count],0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_gameweek_statuses]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_gameweek_statuses] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_gameweek_statuses] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.season = ba.season
+		AND te.season_type = ba.season_type
+		AND te.[week] = ba.[week]
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_gameweek_statuses]
+	FROM [Analytics].[dbo].[bane_pro_player_gameweek_statuses] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_gameweek_statuses] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.season = te.season
+		AND ba.season_type = te.season_type
+		AND ba.[week] = te.[week]
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(12)
+
+	
+	Penalty Stats (as of 09/2021)
+
+    OUTPUT TABLES:            
+		bane_pro_player_penalty_stats
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_pro_player_penalty_stats]
+	SET player = te.player
+		,season = te.season
+		,penalties = te.penalties
+		,declined_penalties = te.declined_penalties
+		,offsetting_penalties = te.offsetting_penalties
+		,delay_of_game = te.delay_of_game
+		,offsides = te.offsides
+		,taunting = te.taunting
+		,unnecessary_roughness = te.unnecessary_roughness
+		,unsportsmanlike_conduct = te.unsportsmanlike_conduct
+		,holding_defense = te.holding_defense
+		,defensive_pass_interference = te.defensive_pass_interference
+		,encroachment = te.encroachment
+		,facemask = te.facemask
+		,horse_collar = te.horse_collar
+		,illegal_contact = te.illegal_contact 
+		,illegal_hands = te.illegal_hands
+		,neutral_zone = te.neutral_zone
+		,roughing_the_passer = te.roughing_the_passer
+		,chop_block = te.chop_block
+		,clipping = te.clipping 
+		,crackback = te.crackback
+		,false_start = te.false_start
+		,blindside_block = te.blindside_block
+		,block_above_waist = te.block_above_waist
+		,illegal_formation = te.illegal_formation
+		,illegal_forward_pass = te.illegal_forward_pass
+		,illegal_motion = te.illegal_motion
+		,illegal_procedure = te.illegal_procedure
+		,illegal_shift = te.illegal_shift
+		,illegal_substitution = te.illegal_substitution
+		,ineligible_downfield = te.ineligible_downfield
+		,intentional_grounding = te.intentional_grounding
+		,low_block = te.low_block
+		,holding_offense = te.holding_offense
+		,offensive_pass_interference = te.offensive_pass_interference
+		,tripping = te.tripping
+		,twelve_men = te.twelve_men
+		,drawn_penalties = te.drawn_penalties
+		,drawn_holding_defense = te.drawn_holding_defense
+		,drawn_defensive_pass_interference = te.drawn_defensive_pass_interference
+		,drawn_illegal_contact = te.drawn_illegal_contact
+		,drawn_offensive_holding = te.drawn_offensive_holding
+		,drawn_offensive_pass_interference = te.drawn_offensive_pass_interference
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_penalty_stats] te
+	WHERE [bane_pro_player_penalty_stats].nfl_player_id = te.nfl_player_id
+		AND [bane_pro_player_penalty_stats].gsis_game_key = te.gsis_game_key
+		AND ([bane_pro_player_penalty_stats].penalties <> te.penalties
+		OR [bane_pro_player_penalty_stats].declined_penalties <> te.declined_penalties
+		OR [bane_pro_player_penalty_stats].offsetting_penalties <> te.offsetting_penalties
+		OR [bane_pro_player_penalty_stats].delay_of_game <> te.delay_of_game
+		OR [bane_pro_player_penalty_stats].offsides <> te.offsides
+		OR [bane_pro_player_penalty_stats].taunting <> te.taunting
+		OR [bane_pro_player_penalty_stats].unnecessary_roughness <> te.unnecessary_roughness
+		OR [bane_pro_player_penalty_stats].unsportsmanlike_conduct <> te.unsportsmanlike_conduct
+		OR [bane_pro_player_penalty_stats].holding_defense <> te.holding_defense
+		OR [bane_pro_player_penalty_stats].defensive_pass_interference <> te.defensive_pass_interference
+		OR [bane_pro_player_penalty_stats].encroachment <> te.encroachment
+		OR [bane_pro_player_penalty_stats].facemask <> te.facemask
+		OR [bane_pro_player_penalty_stats].horse_collar <> te.horse_collar
+		OR [bane_pro_player_penalty_stats].illegal_contact <> te.illegal_contact 
+		OR [bane_pro_player_penalty_stats].illegal_hands <> te.illegal_hands
+		OR [bane_pro_player_penalty_stats].neutral_zone <> te.neutral_zone
+		OR [bane_pro_player_penalty_stats].roughing_the_passer <> te.roughing_the_passer
+		OR [bane_pro_player_penalty_stats].chop_block <> te.chop_block
+		OR [bane_pro_player_penalty_stats].clipping <> te.clipping 
+		OR [bane_pro_player_penalty_stats].crackback <> te.crackback
+		OR [bane_pro_player_penalty_stats].false_start <> te.false_start
+		OR [bane_pro_player_penalty_stats].blindside_block <> te.blindside_block
+		OR [bane_pro_player_penalty_stats].block_above_waist <> te.block_above_waist
+		OR [bane_pro_player_penalty_stats].illegal_formation <> te.illegal_formation
+		OR [bane_pro_player_penalty_stats].illegal_forward_pass <> te.illegal_forward_pass
+		OR [bane_pro_player_penalty_stats].illegal_motion <> te.illegal_motion
+		OR [bane_pro_player_penalty_stats].illegal_procedure <> te.illegal_procedure
+		OR [bane_pro_player_penalty_stats].illegal_shift <> te.illegal_shift
+		OR [bane_pro_player_penalty_stats].illegal_substitution <> te.illegal_substitution
+		OR [bane_pro_player_penalty_stats].ineligible_downfield <> te.ineligible_downfield
+		OR [bane_pro_player_penalty_stats].intentional_grounding <> te.intentional_grounding
+		OR [bane_pro_player_penalty_stats].low_block <> te.low_block
+		OR [bane_pro_player_penalty_stats].holding_offense <> te.holding_offense
+		OR [bane_pro_player_penalty_stats].offensive_pass_interference <> te.offensive_pass_interference
+		OR [bane_pro_player_penalty_stats].tripping <> te.tripping
+		OR [bane_pro_player_penalty_stats].twelve_men <> te.twelve_men
+		OR [bane_pro_player_penalty_stats].drawn_penalties <> te.drawn_penalties
+		OR [bane_pro_player_penalty_stats].drawn_holding_defense <> te.drawn_holding_defense
+		OR [bane_pro_player_penalty_stats].drawn_defensive_pass_interference <> te.drawn_defensive_pass_interference
+		OR [bane_pro_player_penalty_stats].drawn_illegal_contact <> te.drawn_illegal_contact
+		OR [bane_pro_player_penalty_stats].drawn_offensive_holding <> te.drawn_offensive_holding
+		OR [bane_pro_player_penalty_stats].drawn_offensive_pass_interference <> te.drawn_offensive_pass_interference
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_pro_player_penalty_stats]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_pro_player_penalty_stats] te
+	LEFT JOIN [Analytics].[dbo].[bane_pro_player_penalty_stats] ba
+		ON te.nfl_player_id = ba.nfl_player_id
+		AND te.gsis_game_key = ba.gsis_game_key
+	WHERE ba.nfl_player_id IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_pro_player_penalty_stats]
+	FROM [Analytics].[dbo].[bane_pro_player_penalty_stats] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_pro_player_penalty_stats] te
+		ON ba.nfl_player_id = te.nfl_player_id
+		AND ba.gsis_game_key = te.gsis_game_key
+	WHERE te.nfl_player_id IS NULL
+		AND ba.season >= @iSeason
+
+
+
+
+	
+	RETURN @oReturnCD
+		
+END
+
+
+
+
+
+GO
+
+
