@@ -1,0 +1,429 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_college_player_play_injury_facts]    Script Date: 5/12/2022 1:20:34 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_college_player_play_injury_facts] (@oReturnCD INT OUTPUT) as
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Procedure Name:	college_player_play_injury_facts
+Author:			Corey Krawiec
+Creation Date:	10/26/2021
+Description:       
+
+	This program is to create the table that notes if a player is currently injured and thus
+	unavailable on any given play.
+
+	
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date		SE				Description
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+BEGIN
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+
+	Create temp tables of CFF plays. This way you can control what games to run this analysis for in one step.
+
+	Note this step deletes all weeks prior to the current one, if you want to run for a full season comment out the delete query. 
+	
+	TEMP TABLES:
+		#temp_cff_plays
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	DECLARE @current_season INT = (SELECT MAX(season) FROM daily_build_cff_plays)
+	
+	-- Check if #temp_cff_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_plays') IS NOT NULL
+		DROP TABLE #temp_cff_plays
+
+	SELECT *
+		,CASE WHEN LTRIM(RTRIM(UPPER([week]))) = 'CC' THEN 301
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'BG' THEN 302
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'PO' THEN 303
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'FC' THEN 304
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('AS','AP','AG','ASG','ASP') THEN 305
+			WHEN [week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 305
+			ELSE CAST([week] AS TINYINT) + 200
+		 END AS week_adjusted
+	INTO #temp_cff_plays
+	FROM daily_build_cff_plays
+	WHERE season >= @current_season
+		AND [week] NOT LIKE 'P%'
+		AND gsis_play_id IS NOT NULL
+				
+		
+	DECLARE @current_week INT = (SELECT MAX(week_adjusted) FROM #temp_cff_plays)	
+		
+	DELETE FROM #temp_cff_plays
+	WHERE week_adjusted < @current_week
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Create a table of all snaps.
+
+	OUTPUT TABLES:
+	#temp_all_snaps
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_all_snaps exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
+		DROP TABLE #temp_all_snaps
+
+	SELECT sp.gsis_player_id AS gsis_player_id
+		,sp.play_id AS pff_play_id
+		,sp.gsis_game_id AS gsis_game_key
+		,sp.gsis_play_id
+		,pl.season
+		,week_adjusted
+		,pl.sort_order
+		,team AS club_code
+		,'special teams' AS side_of_ball
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.injured_on_play))) = 'TRUE' THEN 1 ELSE 0 END AS injured_on_play
+	INTO #temp_all_snaps
+	FROM daily_build_cff_special sp
+	INNER JOIN #temp_cff_plays pl
+		ON sp.play_id = pl.play_id
+	WHERE gsis_player_id <> 0
+		AND gsis_player_id IS NOT NULL
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT sp.gsis_player_id AS gsis_player_id
+		,sp.play_id AS pff_play_id
+		,sp.gsis_game_id AS gsis_game_key
+		,sp.gsis_play_id
+		,pl.season
+		,week_adjusted
+		,pl.sort_order
+		,team AS club_code
+		,'special teams' AS side_of_ball
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.injured_on_play))) = 'TRUE' THEN 1 ELSE 0 END AS injured_on_play
+	FROM daily_build_cff_defense sp
+	INNER JOIN #temp_cff_plays pl
+		ON sp.play_id = pl.play_id
+	WHERE pl.kick_result = 'FAKE'
+		AND gsis_player_id <> 0
+		AND gsis_player_id IS NOT NULL
+		AND pl.play_id NOT IN (SELECT pff_play_id FROM #temp_all_snaps)
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT sp.gsis_player_id AS gsis_player_id
+		,sp.play_id AS pff_play_id
+		,sp.gsis_game_id AS gsis_game_key
+		,sp.gsis_play_id
+		,pl.season
+		,week_adjusted
+		,pl.sort_order
+		,team AS club_code
+		,'special teams' AS side_of_ball
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.injured_on_play))) = 'TRUE' THEN 1 ELSE 0 END AS injured_on_play
+	FROM daily_build_cff_offense sp
+	INNER JOIN #temp_cff_plays pl
+		ON sp.play_id = pl.play_id
+	WHERE pl.kick_result = 'FAKE'
+		AND gsis_player_id <> 0
+		AND gsis_player_id IS NOT NULL
+		AND pl.play_id NOT IN (SELECT pff_play_id FROM #temp_all_snaps)
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT sp.gsis_player_id AS gsis_player_id
+		,sp.play_id AS pff_play_id
+		,sp.gsis_game_id AS gsis_game_key
+		,sp.gsis_play_id
+		,pl.season
+		,week_adjusted
+		,pl.sort_order
+		,team AS club_code
+		,'defense' AS side_of_ball
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.injured_on_play))) = 'TRUE' THEN 1 ELSE 0 END AS injured_on_play
+	FROM daily_build_cff_defense sp
+	INNER JOIN #temp_cff_plays pl
+		ON sp.play_id = pl.play_id
+	WHERE pl.kick_result IS NULL
+		AND gsis_player_id <> 0
+		AND gsis_player_id IS NOT NULL
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT sp.gsis_player_id AS gsis_player_id
+		,sp.play_id AS pff_play_id
+		,sp.gsis_game_id AS gsis_game_key
+		,sp.gsis_play_id
+		,pl.season
+		,week_adjusted
+		,pl.sort_order
+		,team AS club_code
+		,'offense' AS side_of_ball
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.injured_on_play))) = 'TRUE' THEN 1 ELSE 0 END AS injured_on_play
+	FROM daily_build_cff_offense sp
+	INNER JOIN #temp_cff_plays pl
+		ON sp.play_id = pl.play_id
+	WHERE pl.kick_result IS NULL
+		AND gsis_player_id <> 0
+		AND gsis_player_id IS NOT NULL
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	You need a table that has a row for every play in a game for every player who was in that game.
+
+	First create a table with games and plays. Then create a table with games and players.
+	Join them and you should have a row for every player for each play in a game he played in (whether
+	he was in on the play or not).
+
+	OUTPUT TABLES:
+	#temp_games_plays
+	#temp_games_players
+	#temp_games_plays_players
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_games_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_games_plays') IS NOT NULL
+		DROP TABLE #temp_games_plays
+
+	SELECT DISTINCT gsis_game_key
+		,pff_play_id
+		,gsis_play_id
+		,season
+		,week_adjusted
+		,sort_order
+	INTO #temp_games_plays
+	FROM #temp_all_snaps
+
+
+	-- Check if #temp_games_players exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_games_players') IS NOT NULL
+		DROP TABLE #temp_games_players
+
+	SELECT DISTINCT gsis_game_key
+		,gsis_player_id
+		,club_code
+	INTO #temp_games_players
+	FROM #temp_all_snaps
+
+
+	-- Check if #temp_games_plays_players exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_games_plays_players') IS NOT NULL
+		DROP TABLE #temp_games_plays_players
+
+	SELECT py.gsis_game_key
+		,py.pff_play_id
+		,py.gsis_play_id
+		,py.season
+		,py.week_adjusted
+		,py.sort_order
+		,pl.gsis_player_id
+		,club_code
+	INTO #temp_games_plays_players
+	FROM #temp_games_plays py
+	INNER JOIN #temp_games_players pl
+		ON py.gsis_game_key = pl.gsis_game_key
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	
+	(4)
+
+
+	Now join the all snaps data to the games-plays-player table so you can note if
+	a player was in on a play or hurt on a play.  This is the table you can use to create
+	the currently_injured variable.
+
+	OUTPUT TABLE:
+	#temp_games_plays_players_injuries
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_games_plays_players_injuries exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_games_plays_players_injuries') IS NOT NULL
+		DROP TABLE #temp_games_plays_players_injuries
+
+	SELECT gpp.gsis_game_key
+		,gpp.pff_play_id
+		,gpp.gsis_play_id
+		,gpp.gsis_player_id
+		,gpp.season
+		,gpp.week_adjusted
+		,gpp.sort_order
+		,gpp.club_code
+		,CASE WHEN asn.gsis_player_id IS NOT NULL THEN 1 ELSE 0 END AS active_play
+		,CASE WHEN asn.injured_on_play = 1 THEN 1 ELSE 0 END AS injured_on_play
+	INTO #temp_games_plays_players_injuries
+	FROM #temp_games_plays_players gpp
+	LEFT JOIN #temp_all_snaps asn
+		ON gpp.gsis_game_key = asn.gsis_game_key
+		AND gpp.pff_play_id = asn.pff_play_id
+		AND gpp.gsis_player_id = asn.gsis_player_id
+	ORDER BY gpp.gsis_player_id
+		,gpp.gsis_game_key
+		,gpp.pff_play_id
+
+
+	DROP TABLE #temp_games_plays_players
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(5)
+
+
+	Use cumulative sums to find out which plays a player was currently injured on.
+
+	You have to do it in two steps because you can't have a SUM OVER() inside of another SUM OVER().
+
+	OUTPUT TABLE:
+	#temp_currently_injured_plays
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_initial_currently_injured_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_initial_currently_injured_plays') IS NOT NULL
+		DROP TABLE #temp_initial_currently_injured_plays
+
+	SELECT gsis_game_key
+		,pff_play_id
+		,gsis_play_id
+		,gsis_player_id
+		,season
+		,week_adjusted
+		,sort_order
+		,club_code
+		,active_play
+		,injured_on_play
+		,SUM(injured_on_play) OVER (PARTITION BY gsis_game_key, gsis_player_id ORDER BY sort_order) - CASE WHEN injured_on_play = 1 THEN 1 ELSE 0 END AS injured_cumsum
+		,CASE WHEN active_play = 1 AND SUM(injured_on_play) OVER (PARTITION BY gsis_game_key, gsis_player_id ORDER BY sort_order) - CASE WHEN injured_on_play = 1 THEN 1 ELSE 0 END > 0 THEN 1 ELSE 0 END AS playing_after_injury
+	INTO #temp_initial_currently_injured_plays
+	FROM #temp_games_plays_players_injuries
+
+
+	-- Check if #temp_currently_injured_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_currently_injured_plays') IS NOT NULL
+		DROP TABLE #temp_currently_injured_plays
+
+	SELECT *
+		,SUM(playing_after_injury) OVER (PARTITION BY gsis_game_key, gsis_player_id, injured_cumsum ORDER BY sort_order) AS playing_after_injury_cumsum
+		,CASE WHEN injured_cumsum > 0 and SUM(playing_after_injury) OVER (PARTITION BY gsis_game_key, gsis_player_id, injured_cumsum ORDER BY sort_order) = 0 THEN 1 ELSE 0 END AS currently_injured
+	INTO #temp_currently_injured_plays
+	FROM #temp_initial_currently_injured_plays
+
+
+	DROP TABLE #temp_initial_currently_injured_plays
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+	(6)
+
+
+	Update the currently injured table.
+
+	Note you have currently_injured on both the temp table and the insert table. The first one just cuts down the initial dataset, the second one is to remove plays
+	on the other side of the ball where the player would have gotten currently_injured = 1 even if he had come back in the game because of how the code works.  They
+	are both here for a reason.
+
+	OUTPUT TABLE:
+		college_player_play_injury_facts
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_college_player_play_injury_facts exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_college_player_play_injury_facts') IS NOT NULL
+		DROP TABLE #temp_college_player_play_injury_facts
+
+	SELECT gsis_game_key
+		,ci.gsis_play_id
+		,pff_play_id
+		,gsis_player_id
+		,ci.season
+		,week_adjusted
+		,club_code
+		,CASE WHEN po.[team] = 'defense' AND club_code <> pf.offense THEN ci.currently_injured 
+			WHEN po.[team] = 'offense' AND club_code = pf.offense THEN ci.currently_injured
+			ELSE 0
+		END AS currently_injured
+	INTO #temp_college_player_play_injury_facts
+	FROM #temp_currently_injured_plays ci
+	INNER JOIN daily_build_cff_plays pf
+		ON ci.pff_play_id = pf.play_id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON ci.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE currently_injured = 1
+		and ci.gsis_play_id IS NOT NULL
+
+
+--Insert any new rows
+	INSERT INTO [college_player_play_injury_facts]
+	SELECT te.gsis_game_key
+		,te.gsis_play_id
+		,te.pff_play_id
+		,te.gsis_player_id
+		,te.season
+		,te.week_adjusted
+		,te.club_code
+		,te.currently_injured
+	FROM #temp_college_player_play_injury_facts te
+	LEFT JOIN [college_player_play_injury_facts] ba
+		ON te.gsis_player_id = ba.gsis_player_id
+		AND te.pff_play_id = ba.pff_play_id
+	WHERE ba.gsis_player_id IS NULL
+		AND te.currently_injured = 1
+
+
+
+	DROP TABLE #temp_college_player_play_injury_facts
+
+
+
+END
+GO
+
+
