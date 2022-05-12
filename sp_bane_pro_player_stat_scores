@@ -1,11 +1,7 @@
-
-
-
-
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_advanced_statistics_scores]    Script Date: 5/12/2022 10:53:26 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_player_stat_scores]    Script Date: 5/12/2022 10:52:51 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -22,11 +18,14 @@ GO
 
 
 
-ALTER PROCEDURE [dbo].[sp_analysis_players_advanced_statistics_scores] (@oReturnCD INT OUTPUT) as
+
+
+
+ALTER PROCEDURE [dbo].[sp_bane_pro_player_stat_scores] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Program Name:	analysis_players_advanced_statistics_scores
+Program Name:	bane_pro_player_stat_scores
 Author:			Corey Krawiec
 Creation Date:	10/30/2019
 Description:       
@@ -90,12 +89,12 @@ IF OBJECT_ID('tempdb..#temp_statistic_scores') IS NOT NULL
 				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.20
 				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.20
 			END
-		WHEN team = 'defense' AND def.position_blt IN ('DE43','OB34','RUSH','SAM') AND po.translation NOT IN ('IB') THEN
-			CASE WHEN ty.[name] = 'disruption_rate' THEN COALESCE(statistic_percentile,0) * 0.25
-				WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.10
-				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.25
-				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.20
-				WHEN ty.[name] = 'close_on_ball_percentage' THEN COALESCE(statistic_percentile,0) * 0.20
+		WHEN team = 'defense' AND def.position_blt IN ('DE43','OB34','RUSH','SAM','EDGE') AND po.translation NOT IN ('IB') THEN
+			CASE WHEN ty.[name] = 'disruption_rate' THEN COALESCE(statistic_percentile,0) * 0.35
+				WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.15
+				WHEN ty.[name] = 'extra_tackles' THEN COALESCE(statistic_percentile,0) * 0.20
+				WHEN ty.[name] = 'stop_rate' THEN COALESCE(statistic_percentile,0) * 0.15
+				WHEN ty.[name] = 'close_on_ball_percentage' THEN COALESCE(statistic_percentile,0) * 0.15
 			END
 		WHEN team = 'defense' AND ((def.position_blt IN ('IB','MIKE','WILL') AND po.translation NOT IN ('DS')) OR (def.position_blt IN ('DE43','OB34','RUSH','SAM') AND po.translation IN ('IB'))) THEN
 			CASE WHEN ty.[name] = 'run_defense_wins' THEN COALESCE(statistic_percentile,0) * 0.10
@@ -144,20 +143,20 @@ IF OBJECT_ID('tempdb..#temp_statistic_scores') IS NOT NULL
 			END
 		END AS statistic_score
 	INTO #temp_statistic_scores
-	FROM r_output_regressed_statistics rs
+	FROM [bane_pro_player_regressed_stats] rs
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON rs.nfl_player_id = pl.nfl_id	
 		AND pl.is_deleted = 0
 	INNER JOIN BaneProductionAnalytics.dbo.positions po
 		ON pl.position_id = po.id
-	INNER JOIN map_regressed_statistic_type ty
+	INNER JOIN [bane_regressed_stat_types] ty
 		ON rs.statistic_id = ty.id	
-	LEFT JOIN analysis_players_season_position_defense def
+	LEFT JOIN [pro_player_season_positions] def
 		ON rs.nfl_player_id = def.nfl_player_id
 		AND rs.season = def.season
 		AND rs.season_type_adjusted = def.season_type_adjusted
 		AND def.defense_type = 'ALL'
-	LEFT JOIN analysis_players_season_position_offense ofp
+	LEFT JOIN [pro_player_season_positions] ofp
 		ON rs.nfl_player_id = ofp.nfl_player_id
 		AND rs.season = ofp.season
 		AND rs.season_type_adjusted = ofp.season_type_adjusted
@@ -403,116 +402,26 @@ IF OBJECT_ID('tempdb..#temp_statistic_percentiles_pivot') IS NOT NULL
 	WHERE 1 = 1
 
 
-
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Get raning and scores from the pro grades model and market values - this is a temp solution for now.
-
-TEMP TABLES:
-#temp_model_prediction_ranks
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_model_predictions exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_model_predictions') IS NOT NULL
-	DROP TABLE #temp_model_predictions
-
-	SELECT ac.nfl_player_id
-		,pl.id AS bane_player_id
-		,mv.player
-		,mv.season
-		,CASE WHEN team = 'defense' THEN 
-			CASE WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') AND po.translation IN ('IB') THEN 'IB' 
-				WHEN def.position_blt IN ('RUSH','SAM','OB34','DE43') THEN 'EDGE'
-				WHEN def.position_blt IN ('IB','MIKE','WILL') AND po.translation IN ('DS') THEN 'SS'
-				WHEN def.position_blt IN ('IB','MIKE','WILL') THEN 'IB'
-				ELSE def.position_blt
-			END
-		 WHEN team = 'offense' THEN
-			CASE WHEN ofp.position_blt = 'WR' THEN CASE WHEN ofp.receiver_type IN ('SLOT','INSIDE') THEN 'SLOT' ELSE ofp.receiver_type END
-				WHEN ofp.position_blt IN ('LOT','ROT','OT') THEN 'OT'
-				WHEN ofp.position_blt IN ('LOG','ROG','OG') THEN 'OG'
-				ELSE ofp.position_blt
-			END
-		END AS position_blt
-		,gr.[value] AS grade_bucket
-		,mv.market_value_scaled_to_modern_years AS predicted_apy_percent
-		,mv.market_value_original
-	INTO #temp_model_predictions
-	FROM Analytics.dbo.analysis_players_pro_model_grades ac
-	INNER JOIN BaneProductionAnalytics.dbo.grades gr
-		ON ac.grade_id = gr.id
-		AND gr.active = 1
-	INNER JOIN AnalyticsSandbox.dbo.market_values_rescaled_2021 mv
-		ON ac.nfl_player_id = mv.nfl_player_id
-		AND ac.season = mv.season
-	INNER JOIN BaneProductionAnalytics.dbo.players pl
-		ON ac.nfl_player_id = pl.nfl_id	
-		AND pl.is_deleted = 0
-	INNER JOIN BaneProductionAnalytics.dbo.positions po
-		ON pl.position_id = po.id
-	LEFT JOIN Analytics.dbo.analysis_players_season_position_defense def
-		ON ac.nfl_player_id = def.nfl_player_id
-		AND ac.season = def.season
-		AND def.season_type_adjusted = 'REGPOST'
-		AND def.defense_type = 'ALL'
-	LEFT JOIN Analytics.dbo.analysis_players_season_position_offense ofp
-		ON ac.nfl_player_id = ofp.nfl_player_id
-		AND ac.season = ofp.season
-		AND ofp.season_type_adjusted = 'REGPOST'
-	WHERE ac.season = 2021
-		AND ac.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_model_grades WHERE season = 2021)
-	ORDER BY mv.market_value_scaled_to_modern_years DESC
-
-
--- Check if #temp_model_position_counts exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_model_position_counts') IS NOT NULL
-	DROP TABLE #temp_model_position_counts
-
-	SELECT season
-		,position_blt
-		,COUNT(*) AS position_count
-	INTO #temp_model_position_counts
-	FROM #temp_model_predictions
-	GROUP BY season
-		,position_blt
-
-
--- Check if #temp_model_prediction_ranks exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_model_prediction_ranks') IS NOT NULL
-	DROP TABLE #temp_model_prediction_ranks
-
-	SELECT mp.*
-		,RANK() OVER (PARTITION BY mp.season, mp.position_blt ORDER BY grade_bucket DESC, predicted_apy_percent DESC, market_value_original DESC) AS predicted_apy_rank
-		,(position_count - RANK() OVER (PARTITION BY mp.season, mp.position_blt ORDER BY grade_bucket DESC, predicted_apy_percent DESC, market_value_original DESC) + 1) / CAST(position_count AS FLOAT) AS predicted_apy_percentile
-	INTO #temp_model_prediction_ranks
-	FROM #temp_model_predictions mp
-	INNER JOIN #temp_model_position_counts co
-		ON mp.season = co.season
-		AND mp.position_blt = co.position_blt
-
-
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Join the scores to the pivoted rankings.
 
-ANALYSIS TABLES:
-analysis_players_advanced_statistics_scores
+PERMANENT TABLES:
+bane_pro_player_stat_scores
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE analysis_players_advanced_statistics_scores
+	TRUNCATE TABLE bane_pro_player_stat_scores
 
-	INSERT INTO analysis_players_advanced_statistics_scores
+	INSERT INTO bane_pro_player_stat_scores
 	SELECT ss.nfl_player_id
 		,ss.player_name
 		,ss.season
 		,ss.season_type_adjusted
 		,ss.rolling_game_stats
 		,ss.position_blt
-		,CASE WHEN ss.season = 2021 THEN pl.predicted_apy_percentile ELSE ss.statistic_score_sum END AS statistic_score_sum
-		,CASE WHEN ss.season = 2021 THEN pl.predicted_apy_rank ELSE ss.statistic_score_rank END AS statistic_score_rank
+		,ss.statistic_score_sum
+		,ss.statistic_score_rank
 		,statistic_value_RYA
 		,statistic_percentile_RYA
 		,statistic_grade_RYA
@@ -577,7 +486,7 @@ analysis_players_advanced_statistics_scores
 		,statistic_grade_EPA
 		,statistic_percentile_EPA
 		--,statistic_rank_EPA
-		,GETDATE() AS created_at
+		,GETDATE() AS updated_at
 	FROM #temp_statistic_scores_season ss
 	LEFT JOIN #temp_statistic_values_pivot va
 		ON ss.nfl_player_id = va.nfl_player_id
@@ -599,9 +508,6 @@ analysis_players_advanced_statistics_scores
 		AND ss.season = ra.season
 		AND ss.season_type_adjusted = ra.season_type_adjusted
 		AND ss.rolling_game_stats = ra.rolling_game_stats
-	INNER JOIN #temp_model_prediction_ranks pl
-		ON ss.nfl_player_id = pl.nfl_player_id
-
 
 
 	PROC_END:
