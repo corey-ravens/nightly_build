@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_stage_plays_play_data_college]    Script Date: 5/12/2022 11:18:13 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_college_play_facts]    Script Date: 5/12/2022 11:17:44 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -15,42 +15,31 @@ GO
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-ALTER PROCEDURE [dbo].[sp_stage_plays_play_data_college] (@iSeason INT, @oReturnCD INT OUTPUT) as
+ALTER PROCEDURE [dbo].[sp_college_play_facts] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_stage_plays_play_data_college
+Procedure Name:	sp_college_play_facts
 Author:			Corey Krawiec
 Creation Date:	09/24/2019
 Description:       
 
-	**********IF YOU CHANGE THIS PROGRAM, MAKE THE SAME CHANGE TO sp_stage_plays_play_data RIGHT AWAY**********
+	**********IF YOU CHANGE THIS PROGRAM, MAKE THE SAME CHANGE TO sp_pro_play_facts RIGHT AWAY**********
 
-	This is the college version of the stage_plays_play data program. Updates made to one will be made (or at least noted) on the other.
+	This is the college version of the pro play fact program. Updates made to one will be made (or at least noted) on the other.
 
-	*) Play Delete List
-	1) Ancillary Info
-	2) Offensive Alignment
-	3) Defensive Alignment
-	4) Context
-	5) Results
-	6) Tackle
-	7) Pass Rush
-	8) Pass
-	9) Run
-	10) Penalty
-	11) Type
+	1) CFF Table Prep
+	2) Ancillary Info
+	3) Offensive Alignment
+	4) Defensive Alignment
+	5) Context
+	6) Results
+	7) Tackle
+	8) Pass Rush
+	9) Pass
+	10) Run
+	11) Penalty
+	12) Type
 			
 Input Parameters:
 	@iSeason
@@ -68,41 +57,23 @@ Date        SE  Description
 
 BEGIN 
 
-/*
-	-- Debug Variables
-
-	declare @iSeason INT, @oReturnCD INT 
-	set @iseason  = 2021
-
-
-*/
-
 	SET @oReturnCD  = 0
+
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(0)(a)
+	(1)
 
 
 	Create temp tables of all the CFF tables - they update frequently and you don't want to get caught mid update when this is running.
-
-	In this step do plays.
 	
 	TEMP TABLES:
 		#temp_cff_plays
+		#temp_cff_defense
+		#temp_cff_offense
+		#temp_cff_special
 			    
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-	-- Check if #temp_cff_plays_orders exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_cff_plays_orders') IS NOT NULL
-		DROP TABLE #temp_cff_plays_orders
-
-	SELECT *
-		,ROW_NUMBER() OVER (PARTITION BY play_id ORDER BY gsis_play_id) AS play_row_order
-	INTO #temp_cff_plays_orders
-	FROM [CFFUltimate].[dbo].[plays]
-	WHERE season >= @iSeason
-
 
 	-- Check if #temp_cff_plays exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_cff_plays') IS NOT NULL
@@ -110,72 +81,17 @@ BEGIN
 
 	SELECT *
 	INTO #temp_cff_plays
-	FROM #temp_cff_plays_orders
-	WHERE play_row_order = 1
+	FROM daily_build_cff_plays
 
 
-	DROP TABLE #temp_cff_plays_orders
-
-
-	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-	(0)(b)
-
-
-	Temp CFF Defense table.
-
-	You also delete any player plays that have a null gsis id IF that same play has other player plays with a gsis id. You don't want to take out
-	all plays with no gsis play id because that might just be due to a delay in PFF getting the ids.
-
-	TEMP TABLES:
-		#temp_cff_defense
-			    
-	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-	
 	-- Check if #temp_cff_defense exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_cff_defense') IS NOT NULL
 		DROP TABLE #temp_cff_defense
 
 	SELECT de.*
 	INTO #temp_cff_defense
-	FROM [CFFUltimate].[dbo].[defense] de
-	INNER JOIN #temp_cff_plays pl
-		ON de.play_id = pl.play_id
+	FROM daily_build_cff_defense de
 
-
-	-- Check if #temp_cff_defense_extras exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_cff_defense_extras') IS NOT NULL
-		DROP TABLE #temp_cff_defense_extras
-
-	SELECT play_id
-	INTO #temp_cff_defense_extras
-	FROM #temp_cff_defense
-	GROUP BY play_id
-	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
-	
-
-	DELETE
-	FROM #temp_cff_defense
-	WHERE gsis_play_id IS NULL
-		AND play_id IN (SELECT play_id FROM #temp_cff_defense_extras)
-
-
-	DROP TABLE #temp_cff_defense_extras
-
-
-	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-	(0)(c)
-
-
-	Temp CFF Offense table.
-
-	You also delete any player plays that have a null gsis id IF that same play has other player plays with a gsis id. You don't want to take out
-	all plays with no gsis play id because that might just be due to a delay in PFF getting the ids.
-	TEMP TABLES:
-		#temp_cff_offense
-			    
-	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 	-- Check if #temp_cff_offense exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_cff_offense') IS NOT NULL
@@ -183,34 +99,21 @@ BEGIN
 
 	SELECT oo.*
 	INTO #temp_cff_offense
-	FROM [CFFUltimate].[dbo].[offense] oo
-	INNER JOIN #temp_cff_plays pl
-		ON oo.play_id = pl.play_id
+	FROM daily_build_cff_offense oo
+
+
+	-- Check if #temp_cff_special exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_special') IS NOT NULL
+		DROP TABLE #temp_cff_special
+
+	SELECT DISTINCT oo.play_id AS pff_play_id
+	INTO #temp_cff_special
+	FROM daily_build_cff_special oo
 
 	
-	-- Check if #temp_cff_offense_extras exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_cff_offense_extras') IS NOT NULL
-		DROP TABLE #temp_cff_offense_extras
-
-	SELECT play_id
-	INTO #temp_cff_offense_extras
-	FROM #temp_cff_offense
-	GROUP BY play_id
-	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
-	
-
-	DELETE
-	FROM #temp_cff_offense
-	WHERE gsis_play_id IS NULL
-		AND play_id IN (SELECT play_id FROM #temp_cff_offense_extras)
-
-
-	DROP TABLE #temp_cff_offense_extras
-
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 	
-	(1)
+	(2)
 
 	Ancillary play info (season, play weight, random number, etc.)
 
@@ -221,7 +124,7 @@ BEGIN
 		#temp_first_down_achieved
 
 	STAGING TABLES:
-		stage_plays_play_ancillary_college
+		college_play_ancillary_facts
 
 	--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -239,7 +142,7 @@ BEGIN
 		,ABS(CHECKSUM(NEWID())) % 12 as random_number_play
 	INTO #temp_random_play
 	FROM #temp_cff_plays
-	WHERE season >= @iSeason
+	--WHERE season >= @iSeason
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -271,7 +174,7 @@ BEGIN
 		,900-(SUBSTRING([clock],1,CHARINDEX(':',[clock])-1)*60 + SUBSTRING([clock],CHARINDEX(':',[clock])+1,LEN([clock]))) AS quarter_clock_counting_up_pff
 	  INTO #temp_time_remaining_pff
 	  FROM #temp_cff_plays	
-	  WHERE season >= @iSeason 
+	 --WHERE season >= @iSeason 
 
 
 	-- Check if #temp_time_remaining_nfl exists, if it does drop it
@@ -306,11 +209,11 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_ancillary_college table
-	DELETE FROM stage_plays_play_ancillary_college
+	-- Clear data from the college_play_ancillary_facts table
+	DELETE FROM college_play_ancillary_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_ancillary_college
+	INSERT INTO college_play_ancillary_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[is_no_play]
@@ -325,7 +228,7 @@ BEGIN
 		,[week_adjusted]
 		,[gsis_game_key])
 	SELECT pff_p.play_id AS pff_play_id
-		,pff_p.gsis_play_id AS gsis_play_id
+		,ISNULL(pff_p.gsis_play_id,0) AS gsis_play_id
 		,CASE WHEN (no_play = 0 OR (no_play = 1 AND down = 0 AND LTRIM(RTRIM(UPPER(run_pass))) IN ('R','P') AND penalty IS NULL)) THEN 0 ELSE 1 END AS is_no_play
 		,no_play AS is_no_play_pff --excludes two point conversions
 		,CASE WHEN down = 0 AND LTRIM(RTRIM(UPPER(run_pass))) IN ('R','P') AND penalty IS NULL THEN 1 ELSE 0 END AS is_two_point_conversion
@@ -353,22 +256,32 @@ BEGIN
 				ELSE 1
 		END AS play_weight
 		,random_number_play
-		,CASE WHEN pff_p.[week] IN ('AS') THEN 'AS'
+		,CASE WHEN pff_p.[week] IN ('AS','AP','AG','ASG','ASP') THEN 'AS'
 			WHEN pff_p.[week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 'AS'
-			ELSE season_type
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('BG','CC','FC','PO') THEN 'POST'
+			ELSE 'REG'
 		END AS season_type
-		,g.season
-		,CASE WHEN pff_p.[week] IN ('AS') THEN 'AS'
+		,season
+		,CASE WHEN pff_p.[week] IN ('AS','AP','AG','ASG','ASP') THEN 'AS'
 			WHEN pff_p.[week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 'AS'
-			WHEN season_type IN ('REG','POST') THEN 'REGPOST'
-			ELSE 'PRE'
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('BG','CC','FC','PO') THEN 'REGPOST'
+			ELSE 'REGPOST'
 		END AS season_type_adjusted
-		,g.[week]
-		,CASE WHEN pff_p.[week] IN ('AS') THEN 300 + g.[week]
-			WHEN pff_p.[week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 300 + g.[week]
-			WHEN season_type = 'PRE' THEN 100 + g.[week]
-			WHEN season_type = 'REG' THEN 200 + g.[week]
-			WHEN season_type = 'POST' THEN 300 + g.[week]
+		,CASE WHEN LTRIM(RTRIM(UPPER([week]))) = 'CC' THEN 1
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'BG' THEN 2
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'PO' THEN 3
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'FC' THEN 4
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('AS','AP','AG','ASG','ASP') THEN 5
+			ELSE CAST([week] AS TINYINT)
+		END AS [week]
+		,CASE WHEN LTRIM(RTRIM(UPPER([week]))) = 'CC' THEN 301
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'BG' THEN 302
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'PO' THEN 303
+			WHEN LTRIM(RTRIM(UPPER([week]))) = 'FC' THEN 304
+			WHEN LTRIM(RTRIM(UPPER([week]))) IN ('AS','AP','AG','ASG','ASP') THEN 305
+			WHEN pff_p.[week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST') THEN 305
+			--WHEN pff_p.[week] LIKE 'P%' THEN 100 + RIGHT(pff_p.[week],1)
+			ELSE CAST([week] AS TINYINT) + 200
 		 END AS week_adjusted
 		,gsis_game_id AS gsis_game_key
 	FROM #temp_cff_plays pff_p 
@@ -379,25 +292,23 @@ BEGIN
 		AND pff_p.gsis_play_id = nfl_time.PlayID	   
 	LEFT JOIN #temp_random_play random_play --The table with the random number on each play
 		ON pff_p.play_id = random_play.pff_play_id		   
-	INNER JOIN stage_games_pff_college g --The games table
-	    ON pff_p.game_id = g.pff_game_id	
-	WHERE pff_p.season >= @iSeason
-		--AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 1
+		SET @oReturnCD = 2
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_ancillary_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_ancillary_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
 	DROP TABLE #temp_random_play
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(2)
+	(3)
 
 
 	Create the offensive alignment information table.  Count the number of FB, TE, etc.
@@ -411,7 +322,7 @@ BEGIN
 		#temp_off_player_counts
 
 	STAGING TABLES:
-		stage_plays_play_offensive_alignment_college
+		college_play_offense_alignment_facts
 				    
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -425,8 +336,7 @@ BEGIN
 	FROM #temp_cff_offense pfo
 	INNER JOIN  #temp_cff_plays pfp
 		ON pfo.play_id = pfp.play_id
-	WHERE season >=  @iSeason
-		--AND pfp.gsis_play_id IS NOT NULL
+	--WHERE pfp.gsis_play_id IS NOT NULL
 	GROUP BY pfo.play_id 
 
 
@@ -451,8 +361,7 @@ BEGIN
 	FROM #temp_cff_offense pfo
 	INNER JOIN  #temp_cff_plays pfp
 		ON pfo.play_id = pfp.play_id
-	WHERE season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL 
+	--WHERE pfp.gsis_play_id IS NOT NULL 
 	GROUP BY pfo.play_id
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -461,11 +370,11 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_offensive_alignment_college table 
-	DELETE FROM stage_plays_play_offensive_alignment_college
+	-- Clear data from the college_play_offense_alignment_facts table 
+	DELETE FROM college_play_offense_alignment_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_offensive_alignment_college
+	INSERT INTO college_play_offense_alignment_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[offensive_formation_group]
@@ -483,7 +392,7 @@ BEGIN
 		,[strong_side]
 		,[double_teamer_off_play_total])		
 	SELECT pff_p.play_id AS pff_play_id
-		,pff_p.gsis_play_id AS gsis_play_id
+		,ISNULL(pff_p.gsis_play_id,0) AS gsis_play_id
 		,LTRIM(RTRIM(UPPER(offensive_formation_group))) AS offensive_formation_group
 		,LTRIM(RTRIM(UPPER(offensive_personnel))) AS offensive_personnel
 		,LTRIM(RTRIM(UPPER(offensive_personnel_basic))) AS offensive_personnel_basic
@@ -508,16 +417,16 @@ BEGIN
 		ON pff_p.play_id = dbl_team_off.pff_play_id
 	LEFT JOIN #temp_off_player_counts off_cnt --The table with the number of players at different positions on a given play
 		ON pff_p.play_id = off_cnt.pff_play_id
-	WHERE season >= @iSeason
-		--AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 2
+		SET @oReturnCD = 3
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_offensive_alignment_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_offense_alignment_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
 	DROP TABLE #temp_off_double_teams
 	DROP TABLE #temp_off_player_counts
@@ -525,7 +434,7 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(3) 
+	(4) 
 
 
 	Create the defensive alignment information table.  First
@@ -554,7 +463,7 @@ BEGIN
 		#temp_def_double_teams
 
 	STAGING TABLES:
-		stage_plays_play_defensive_alignment_college
+		college_play_defense_alignment_facts
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -580,8 +489,7 @@ BEGIN
 	FROM #temp_cff_defense pfd
 	INNER JOIN #temp_cff_plays pfp
 		ON pfd.play_id = pfp.play_id
-	WHERE season >= @iSeason
-		--AND pfp.gsis_play_id IS NOT NULL
+	--WHERE pfp.gsis_play_id IS NOT NULL
     GROUP BY pfd.play_id
 
 
@@ -599,8 +507,7 @@ BEGIN
 	INNER JOIN [map_pff_defensive_line_techniques] dlt
 		ON def.defensive_technique = dlt.pff_defensive_technique
 		AND def.defensive_technique IS NOT NULL
-	WHERE season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL
+	--WHERE pfp.gsis_play_id IS NOT NULL
 	GROUP BY def.play_id
 
 
@@ -663,8 +570,7 @@ BEGIN
 	FROM #temp_cff_defense def
 	INNER JOIN #temp_cff_plays pfp
 		ON def.play_id = pfp.play_id
-	WHERE season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL
+	--WHERE pfp.gsis_play_id IS NOT NULL
 	GROUP BY def.play_id
 
 
@@ -678,8 +584,7 @@ BEGIN
 	FROM #temp_cff_defense def
 	INNER JOIN #temp_cff_plays pfp
 		ON def.play_id = pfp.play_id
-	WHERE season >= @iSeason
-		--AND pfp.gsis_play_id IS NOT NULL
+	--WHERE pfp.gsis_play_id IS NOT NULL
 	GROUP BY def.play_id
 
 
@@ -689,11 +594,11 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_defensive_alignment_college table 
-	DELETE FROM stage_plays_play_defensive_alignment_college
+	-- Clear data from the college_play_defense_alignment_facts table 
+	DELETE FROM college_play_defense_alignment_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_defensive_alignment_college 
+	INSERT INTO college_play_defense_alignment_facts 
 		([pff_play_id]
 		,[gsis_play_id]
 		,[base_or_sub]
@@ -717,7 +622,7 @@ BEGIN
 		,[align_code_right_most_lb]
 		,[align_code_left_most_lb])
 	SELECT pff_p.play_id AS pff_play_id
-		,pff_p.gsis_play_id AS gsis_play_id
+		,ISNULL(pff_p.gsis_play_id,0) AS gsis_play_id
 		--Position Counts
 		,CASE WHEN defensive_back_count <= 4 THEN 'BASE' ELSE 'SUB' END AS base_or_sub
 		,safety_count
@@ -766,16 +671,16 @@ BEGIN
 		ON pff_p.play_id = rll.pff_play_id
 	LEFT JOIN #temp_def_double_teams dbl_team_def --The table with the number of players double teamed on defense on a given play
 		ON pff_p.play_id = dbl_team_def.pff_play_id
-	WHERE season >=  @iSeason
-		--AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 3
+		SET @oReturnCD = 4
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_defensive_alignment_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_defense_alignment_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
 	DROP TABLE #temp_position_count
 	DROP TABLE #temp_def_technique_minimums
@@ -785,21 +690,21 @@ BEGIN
 		
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(4)
+	(5)
 
 
 	Down, Distance, Clock, Field Position, Team Information Table
 
 	OUTPUT TABLES:
-	stage_plays_play_context_college
+	college_play_context_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear the stage_plays_play_context_college table
-	DELETE FROM stage_plays_play_context_college
+	-- Clear the college_play_context_facts table
+	DELETE FROM college_play_context_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_context_college
+	INSERT INTO college_play_context_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[team_offense]
@@ -820,7 +725,7 @@ BEGIN
 		,[score_differential_defense]
 		,[score_differential_defense_bucket])
 	SELECT pff_p.play_id AS pff_play_id
-		,pff_p.gsis_play_id AS gsis_play_id
+		,ISNULL(pff_p.gsis_play_id,0) AS gsis_play_id
 		,pff_p.offense AS team_offense
 		,pff_p.defense AS team_defense
 		,down
@@ -890,21 +795,21 @@ BEGIN
 	LEFT JOIN #temp_time_remaining_nfl nfl_time
 		ON pff_p.gsis_game_id = nfl_time.GameKey
 		AND pff_p.gsis_play_id = nfl_time.PlayID
-	WHERE season >= @iSeason
-		-- AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 4
+		SET @oReturnCD = 5
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_context_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_context_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(5)
+	(6)
 
 
 	Play Results
@@ -916,7 +821,7 @@ BEGIN
 		#temp_plays_expected_points_change
 
 	OUTPUT TABLES:
-		stage_plays_play_results_college
+		college_play_result_facts
 
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
@@ -943,8 +848,7 @@ BEGIN
 		ON pff_play.play_id = pff_time.pff_play_id 
 	WHERE down IN (1,2,3,4)
 		AND no_play = 0 
-		AND season >= @iSeason
-		-- AND pff_play.gsis_play_id IS NOT NULL
+		--AND pff_play.gsis_play_id IS NOT NULL
 	
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1014,19 +918,19 @@ BEGIN
 		,expected_points_added AS expected_points_change_play
 	INTO #temp_plays_expected_points_change
 	FROM #temp_cff_plays
-
 	
+
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 	Play Results Information
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear the stage_plays_play_results_college table
-	DELETE FROM stage_plays_play_results_college
+	-- Clear the college_play_result_facts table
+	DELETE FROM college_play_result_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_results_college
+	INSERT INTO college_play_result_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[play_description]
@@ -1042,7 +946,7 @@ BEGIN
 		,[expected_points_change_play]
 		,[touchdown_play_defense])
 	SELECT pff_p.play_id AS pff_play_id
-		,pff_p.gsis_play_id AS gsis_play_id
+		,ISNULL(pff_p.gsis_play_id,0) AS gsis_play_id
 		,REPLACE(REPLACE([PlayDescription], CHAR(13), ' '), CHAR(10), ' ') AS play_description
 		,gain_loss_net AS net_yards_play
 		,yards_after_contact AS yards_after_contact_play
@@ -1088,16 +992,16 @@ BEGIN
 		ON pff_p.play_id = ru.pff_play_id
 	LEFT JOIN #temp_plays_expected_points_change xp --The table with the expected points data
 		ON pff_p.play_id = xp.pff_play_id
-	WHERE season >= @iSeason
-		-- AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 5
+		SET @oReturnCD = 6
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_results_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_result_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
 	DROP TABLE #temp_first_down_achieved
 	DROP TABLE #temp_receiving_yards_play
@@ -1109,21 +1013,21 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(6) 
+	(7) 
 
 
 	Tackle Information (Play Level)
 
 	STAGING TABLES:
-		stage_plays_play_tackle_college
+		college_play_tackling_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear the stage_plays_play_tackle_college table
-	DELETE FROM stage_plays_play_tackle_college
+	-- Clear the college_play_tackling_facts table
+	DELETE FROM college_play_tackling_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_tackle_college
+	INSERT INTO college_play_tackling_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[tackle_play]
@@ -1134,7 +1038,7 @@ BEGIN
 		,[forced_fumble_play]
 		,[fumble_recovery_team])
 	SELECT play_id AS pff_play_id
-		,gsis_play_id AS gsis_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
 		,CASE WHEN tackle IS NOT NULL AND tackle <> '' THEN 1 ELSE 0 END AS tackle_play
 		,CASE WHEN assist IS NOT NULL AND assist <> '' THEN 1 ELSE 0 END AS tackle_assist_play
 		,CASE WHEN missed_tackle IS NOT NULL AND missed_tackle <> '' THEN 1 ELSE 0 END AS missed_tackle_play
@@ -1143,35 +1047,35 @@ BEGIN
 		,CASE WHEN forced_fumble IS NOT NULL AND forced_fumble <> '' THEN 1 ELSE 0 END AS forced_fumble_play
 		,CASE WHEN fumble_recovery IS NOT NULL AND fumble_recovery <> '' AND fumble IS NOT NULL THEN LTRIM(RTRIM(UPPER(fumble_recovery))) ELSE NULL END AS fumble_recovery_team
 	FROM #temp_cff_plays
-	WHERE season >= @iSeason
-		-- AND gsis_play_id IS NOT NULL
+	--WHERE gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 6
+		SET @oReturnCD = 7
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_tackle_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_tackling_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(7)
+	(8)
 
 
 	Pass Rush Information (Play Level)
 
 	STAGING TABLES:
-		stage_plays_play_pass_rush_college
+		college_play_pass_rush_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_pass_rush_college table 
-	DELETE FROM stage_plays_play_pass_rush_college
+	-- Clear data from the college_play_pass_rush_facts table 
+	DELETE FROM college_play_pass_rush_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_pass_rush_college
+	INSERT INTO college_play_pass_rush_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[time_to_pressure]
@@ -1185,7 +1089,7 @@ BEGIN
 		,[qb_hurry_play]
 		,[unblocked_pressure_play])
 	SELECT play_id AS pff_play_id
-		,gsis_play_id AS gsis_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
 		,time_to_pressure
 		,time_to_throw
 		,LTRIM(RTRIM(UPPER(pass_rush_result))) AS pass_rush_result
@@ -1197,21 +1101,21 @@ BEGIN
 		,CASE WHEN hurry_players IS NOT NULL AND hurry_players <> '' THEN 1 ELSE 0 END AS qb_hurry_play
 		,CASE WHEN unblocked_pressure IS NOT NULL AND unblocked_pressure <> '' THEN 1 ELSE 0 END AS unblocked_pressure_play
 	FROM #temp_cff_plays
-	WHERE season >= @iSeason
-		--AND gsis_play_id IS NOT NULL
+	--WHERE gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 7
+		SET @oReturnCD = 8
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_pass_rush_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_pass_rush_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 	
-	(8)
+	(9)
 
 
 	Pass Information (Play Level)
@@ -1224,7 +1128,7 @@ BEGIN
 		#temp_off_pos_targeted
 
 	OUTPUT TABLES:
-		stage_plays_play_pass_college
+		college_play_passing_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1261,7 +1165,6 @@ BEGIN
 		ON LTRIM(RTRIM(UPPER(po.[pass_route]))) = LTRIM(RTRIM(UPPER(pr.[pff_passroute])))
 		AND LTRIM(RTRIM(UPPER(po.[pass_route_name]))) = LTRIM(RTRIM(UPPER(pr.[pff_passroutename])))
 	WHERE LTRIM(RTRIM(UPPER(po.[targeted_receiver]))) = 'TRUE'
-		AND season >= @iSeason
 		--AND pfp.gsis_play_id IS NOT NULL
 
 
@@ -1284,8 +1187,7 @@ BEGIN
 	INNER JOIN #temp_cff_plays pfp
 		ON pfd.play_id = pfp.play_id
     WHERE pfd.dropped_interception IS NOT NULL
-		AND season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL
+		--AND pfp.gsis_play_id IS NOT NULL
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1306,12 +1208,11 @@ BEGIN
 	FROM #temp_cff_plays pfp
 	INNER JOIN #temp_cff_offense pfo
 		ON pfp.play_id = pfo.play_id
-	INNER JOIN stage_plays_play_context_college co
+	INNER JOIN college_play_context_facts co
 		ON pfp.play_id = co.pff_play_id
     WHERE LTRIM(RTRIM(UPPER(pfo.dropped_pass))) = 'TRUE'
 		AND pfp.pass_depth >= yards_from_opponent_end_zone_start
-		AND season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL
+		--AND pfp.gsis_play_id IS NOT NULL
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1320,11 +1221,11 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_pass_college table 
-	DELETE FROM stage_plays_play_pass_college
+	-- Clear data from the college_play_passing_facts table 
+	DELETE FROM college_play_passing_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_pass_college
+	INSERT INTO college_play_passing_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[air_yards]
@@ -1346,7 +1247,7 @@ BEGIN
 		,[dropped_interception_play]
 		,[dropped_touchdown_play])
 	SELECT pff_p.play_id AS pff_play_id
-		,gsis_play_id AS gsis_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
 		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) IN ('BATTED PASS','HIT AS THREW','RUN','SACK','SPIKE','THROWN AWAY') THEN NULL
 			ELSE pass_depth
 		END AS air_yards
@@ -1428,16 +1329,16 @@ BEGIN
 		ON pff_p.play_id = di.pff_play_id
 	LEFT JOIN #temp_dropped_touchdown_play dt --The table with the dropped touchdowns
 		ON pff_p.play_id = dt.pff_play_id
-	WHERE season >= @iSeason
-		-- AND pff_p.gsis_play_id IS NOT NULL
+	--WHERE pff_p.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN
-		SET @oReturnCD = 8
+		SET @oReturnCD = 9
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_pass_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_passing_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
 	DROP TABLE #temp_off_pos_targeted
 	DROP TABLE #temp_dropped_interception_play
@@ -1446,21 +1347,21 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(9)
+	(10)
 
 
 	Run Information (Play Level)
 
 	STAGING TABLES:
-		stage_plays_play_run_college
+		college_play_running_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_run_college table 
-	DELETE FROM stage_plays_play_run_college
+	-- Clear data from the college_play_running_facts table 
+	DELETE FROM college_play_running_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_run_college
+	INSERT INTO college_play_running_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[run_point_of_attack_intended]
@@ -1514,34 +1415,34 @@ BEGIN
 			  ELSE NULL
 		END AS rb_direction
 	FROM #temp_cff_plays
-	WHERE season >= @iSeason
-	-- AND gsis_play_id IS NOT NULL
+	--WHERE gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 9
+		SET @oReturnCD = 10
 		GOTO PROC_END
 	END 
 		
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_run_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_running_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(10)
+	(11)
 
 	Penalty Information (Play Level)
 
 	STAGING TABLES:
-		stage_plays_play_penalty_college
+		college_play_penalty_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the stage_plays_play_penalty_college table 
-	DELETE FROM stage_plays_play_penalty_college
+	-- Clear data from the college_play_penalty_facts table 
+	DELETE FROM college_play_penalty_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_penalty_college
+	INSERT INTO college_play_penalty_facts
 		([pff_play_id]
 		,[penalty_pff_play]
 		,[penalty_declined_pff_play]
@@ -1585,55 +1486,35 @@ BEGIN
 		,CASE WHEN penalty LIKE '%UNS%' THEN 1 ELSE 0 END AS penalty_unsportsmanlike_conduct_play
 		,CASE WHEN penalty <> '' AND penalty IS NOT NULL THEN penalty_yards ELSE 0 END AS penalty_yards_pff_play
 	FROM #temp_cff_plays
-	WHERE season >= @iSeason
-		-- AND gsis_play_id IS NOT NULL
+	--WHERE gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 10
+		SET @oReturnCD = 11
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_penalty_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_penalty_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(11)
+	(12)
+
 	
 	Play Type Information
 
-	TEMP TABLES :
-		#temp_special_teams_plays
-
 	OUTPUT TABLES:
-		stage_plays_play_type_college
+		college_play_type_facts
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if #temp_special_teams_plays exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_special_teams_plays') IS NOT NULL
-		DROP TABLE #temp_special_teams_plays
-
-	SELECT DISTINCT pfs.play_id AS pff_play_id
-	INTO #temp_special_teams_plays
-	FROM [CFFUltimate].[dbo].[special] pfs
-	INNER JOIN #temp_cff_plays pfp
-		ON pfs.play_id = pfp.play_id
-	WHERE season >= @iSeason
-		-- AND pfp.gsis_play_id IS NOT NULL
-
-	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-	Play Type Information
-
-	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-	-- Clear data from the stage_plays_play_type_college table
-	DELETE FROM stage_plays_play_type_college
+	-- Clear data from the college_play_type_facts table
+	DELETE FROM college_play_type_facts
 	WHERE pff_play_id IN (SELECT play_id FROM #temp_cff_plays)
 
-	INSERT INTO stage_plays_play_type_college
+	INSERT INTO college_play_type_facts
 		([pff_play_id]
 		,[gsis_play_id]
 		,[is_qb_kneel]
@@ -1659,7 +1540,12 @@ BEGIN
 		,[dropback_depth]
 		,[play_side]
 		,[is_lateral]
-		,[is_special_teams])
+		,[is_special_teams]
+		,[is_kickoff]
+		,[is_punt]
+		,[is_field_goal]
+		,[is_extra_point]
+		)
 	SELECT play_id AS pff_play_id
 		,ISNULL(gsis_play_id,0) AS gsis_play_id
 		,CASE WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'QB KNEEL' THEN 1 ELSE 0 END AS is_qb_kneel
@@ -1712,26 +1598,33 @@ BEGIN
 		END AS play_side
 		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) = 'LATERAL' THEN 1 ELSE 0 END AS is_lateral
 		,CASE WHEN st.pff_play_id IS NOT NULL THEN 1 ELSE 0 END AS is_special_teams
+		,CASE WHEN LTRIM(RTRIM(UPPER(pl.special_teams_type))) IN ('KICKOFF') THEN 1 ELSE 0 END AS is_kickoff
+		,CASE WHEN LTRIM(RTRIM(UPPER(pl.special_teams_type))) IN ('PUNT') THEN 1 ELSE 0 END AS is_punt
+		,CASE WHEN LTRIM(RTRIM(UPPER(pl.special_teams_type))) IN ('FIELD GOAL') THEN 1 ELSE 0 END AS is_field_goal
+		,CASE WHEN LTRIM(RTRIM(UPPER(pl.special_teams_type))) IN ('EXTRA POINT') THEN 1 ELSE 0 END AS is_extra_point
 	FROM #temp_cff_plays pl
-	LEFT JOIN #temp_special_teams_plays st
+	LEFT JOIN #temp_cff_special st
 		ON pl.play_id = st.pff_play_id
-	WHERE season >= @iSeason
-		-- AND pl.gsis_play_id IS NOT NULL
+	--WHERE pl.gsis_play_id IS NOT NULL
+
 
 	IF @@ERROR <> 0 BEGIN 
-		SET @oReturnCD = 11
+		SET @oReturnCD = 12
 		GOTO PROC_END
 	END 
 
 	-- Rebuild the index
-	ALTER INDEX ALL ON stage_plays_play_type_college REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON college_play_type_facts REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	-- Drop the temp tables
-	DROP TABLE #temp_special_teams_plays
+	DROP TABLE #temp_cff_plays
+	DROP TABLE #temp_cff_defense
+	DROP TABLE #temp_cff_offense
+	DROP TABLE #temp_cff_special
 
 
 PROC_END:
 
-	RETURN @oReturnCD  
+	RETURN @oReturnCD
 
 END
 
