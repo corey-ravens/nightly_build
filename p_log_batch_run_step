@@ -1,0 +1,86 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_log_batch_run_step]    Script Date: 5/16/2022 11:04:21 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+ALTER proc [dbo].[sp_log_batch_run_step] (@iBatchKey INT, @iSeason INT, @iStepName NVARCHAR(200), @iOrder INT, @iStartEndFlag  SMALLINT = 0 , @iError NVARCHAR(max) = NULL)
+
+as
+
+
+/*********************************************************************************
+
+Procedure Name:	[sp_log_batch_run_step]
+Author:			Jeremy Parks
+Creation Date:	9/1/2017
+Description:       
+
+
+	This procedure logs the batch steps during the nightly batch run.
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+begin
+
+--Declare program variables
+declare @vErrorFlag SMALLINT 
+
+-- Initialize error flag
+set @vErrorFlag = 0 
+
+-- If the start flag is = 0, meaning before the procedure has run, insert a record for the step and log the time.
+if @iStartEndFlag = 0 begin  -- Start, just log the starting time and insert the record
+	
+	-- Insert Record
+	insert into [dbo].[log_batch_step]
+           ([batch_key]
+           ,[batch_step]
+           ,[minimum_season]
+           ,[start_time])
+     values
+           (@iBatchKey
+		   ,@iStepName
+		   ,@iSeason
+		   , getdate())
+end
+
+-- If the start end flag = 1 (end), update the record with the finish time and any errors that
+-- may have occurred.
+if @iStartEndFlag = 1  begin
+
+	-- If an error is passed in set the error flag
+	if @iError is not null 
+		set @vErrorFlag = 1
+
+	-- Update the step with the time and error
+	update log_batch_step 
+		set error_flag = @vErrorFlag, 
+		error_desc = @iError, 
+		end_time = getdate()
+	where batch_key = @iBatchKey
+	and batch_step = @iStepName
+
+
+end
+
+end
+GO
+
+
