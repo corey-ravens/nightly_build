@@ -1,0 +1,149 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_expected_yards_after_catch]    Script Date: 5/16/2022 3:33:40 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+ALTER procedure [dbo].[sp_r_advanced_stats_expected_yards_after_catch] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_r_advanced_stats_expected_yards_after_catch
+Author:			Jeremy Parks
+Creation Date:	6/28/2017
+Description:       
+
+
+	This program is to calculate the expected yards after catch for each completed pass.
+
+	1) Import the Yards After Catch View from Analytics database
+	2) Load the Expected Yards After Catch Model that was build in another program
+	3) Predict values
+	4) Create a new table in the database with the expected YAC values
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+BEGIN
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the R select statement so you can pull only the seasons you want to run.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @vSQL NVARCHAR(250)
+SET @vSQL = 'SELECT * FROM dbo.r_input_expected_yards_after_catch WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Remove all the tackle probabilities from the current season so you don't get dupes on the re-write.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DELETE FROM r_output_expected_yards_after_catch
+WHERE season >= @iSeason
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Submit the R job to R services.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+insert into r_output_expected_yards_after_catch
+
+EXECUTE sp_execute_external_script 
+@language = N'R',
+@script = N'
+#######################################################################################################################
+#######################################################################################################################
+
+# This program is to calculate the expected yards after catch for each completed pass.
+
+# 1) Import the Yards After Catch View from Analytics database
+# 2) Load the Expected Yards After Catch Model that was build in another program
+# 3) Predict values
+# 4) Create a new table in the database with the expected YAC values
+
+#######################################################################################################################
+#######################################################################################################################
+
+
+#######################################################################################################################
+#  Library Loading
+#######################################################################################################################
+
+# Load the necessary libraries
+library(dplyr)
+
+
+#######################################################################################################################
+# Variable Creation
+#######################################################################################################################
+
+
+#######################################################################################################################
+# Load the previously saved best model
+#######################################################################################################################
+# 2:06 PM 9/6/2016
+
+load(file="R:\\model\\expected_yards_after_catch_model")
+
+
+#######################################################################################################################
+# Predict the new data
+#######################################################################################################################
+
+predictions <- predict(model, master_yac, na.action=na.pass)
+master_yac$yards_after_catch_play_expected <- predictions
+
+
+#######################################################################################################################
+# Write the new data back into an SQL table
+#######################################################################################################################
+
+#Only take the pff_play_id and expected YAC columns
+for_sql <- master_yac %>% select(pff_play_id, yards_after_catch_play_expected, season, week_adjusted)
+
+# close the connection channel to the SQL Server',  
+@input_data_1 = @vSQL,
+@input_data_1_name = N'master_yac',
+@output_data_1_name = N'for_sql '
+
+/*
+-- Testing -- Commented out if inserting directly into the table 
+WITH RESULT SETS 
+			((pff_play_id INT,
+            yards_after_catch_play_expected FLOAT,
+			season INT, 
+            week_adjusted INT
+			))
+*/
+
+--r_output_expected_yards_after_catch
+
+
+END
+
+GO
+
+
