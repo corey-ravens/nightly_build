@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_expected_rush_yards]    Script Date: 5/16/2022 3:43:39 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_play_expected_rush_yards]    Script Date: 5/16/2022 3:42:18 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -11,13 +11,14 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_r_advanced_stats_expected_rush_yards] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+ALTER procedure [dbo].[sp_r_pro_play_expected_rush_yards] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
 Procedure Name:	sp_r_advanced_stats_expected_rush_yards
 Author:			Jeremy Parks
-Creation Date:	6/28/2017
+Creation Date:	06/28/2017
 Description:       
 
 	This program is to calculate the expected rush yards for each run play.
@@ -88,7 +89,7 @@ SET @vSQL = 'SELECT [pff_play_id]
       ,[yards_until_potential_tackle_bucket_play]
       ,[yards_until_potential_tackle_play]
       ,[yards_after_contact_play]
-  FROM [dbo].[r_input_expected_rush_yards]
+  FROM [dbo].[pro_play_expected_rush_yards_inputs]
   WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
 
 
@@ -98,7 +99,7 @@ Remove all the tackle probabilities from the current season so you don't get dup
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-DELETE FROM r_output_expected_rush_yards
+DELETE FROM pro_play_expected_rush_yards
 WHERE season >= @iSeason
 
 
@@ -108,7 +109,7 @@ Submit the R job to R services.
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-insert into r_output_expected_rush_yards
+insert into pro_play_expected_rush_yards
 
 EXECUTE sp_execute_external_script 
 @language = N'R',
@@ -181,7 +182,7 @@ WITH RESULT SETS
 */
 
 
---r_output_expected_rush_yards
+--pro_play_expected_rush_yards
 
 
 END
