@@ -1,9 +1,7 @@
-
-
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_stage_players_season_advanced_stats_college]    Script Date: 5/16/2022 10:48:52 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_college_player_season_stats]    Script Date: 5/16/2022 10:47:21 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -17,11 +15,17 @@ GO
 
 
 
-ALTER PROCEDURE [dbo].[sp_stage_players_season_advanced_stats_college] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_college_player_season_stats] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	stage_players_season_advanced_stats_college
+Procedure Name:	college_player_season_stats
 Author:			Corey Krawiec
 Creation Date:	11/15/2019
 Description:       
@@ -78,38 +82,38 @@ BEGIN
 	IF OBJECT_ID('tempdb..#temp_all_games') IS NOT NULL
 		DROP TABLE #temp_all_games
 
-	SELECT DISTINCT o.pff_GSISPLAYERID AS gsis_player_id
-		,o.pff_GSISGAMEKEY AS gsis_game_key
-		,CAST(pff_GAMESEASON AS INT) AS season
-		,CASE WHEN pff_WEEK IN ('BG') THEN 100 
-				WHEN pff_WEEK IN ('CC') THEN 101
-				WHEN pff_WEEK IN ('FC') THEN 102
-				WHEN pff_WEEK IN ('PO') THEN 103
-				ELSE CAST([pff_WEEK] AS INT)
+	SELECT DISTINCT o.gsis_player_id AS gsis_player_id
+		,o.gsis_game_id AS gsis_game_key
+		,season
+		,CASE WHEN [week] IN ('BG') THEN 100 
+				WHEN [week] IN ('CC') THEN 101
+				WHEN [week] IN ('FC') THEN 102
+				WHEN [week] IN ('PO') THEN 103
+				ELSE CAST([week] AS INT)
 		END AS [week]
 	INTO #temp_all_games
-	FROM Cff.dbo.PffPlays p
-	INNER JOIN Cff.dbo.PffOffense o
-		ON p.pff_PLAYID = o.pff_PLAYID
-	WHERE pff_WEEK NOT IN ('AS','AP','ASG','ASP','AG')
-		AND NOT (pff_WEEK IN ('16') AND (pff_OFFTEAM = 'SOUT' OR pff_DEFTEAM = 'SOUT' OR pff_DEFTEAM = 'EAST' OR pff_OFFTEAM = 'EAST'))
+	FROM daily_build_cff_plays p
+	INNER JOIN daily_build_cff_offense o
+		ON p.play_id = o.play_id
+	WHERE [week] NOT IN ('AS','AP','ASG','ASP','AG')
+		AND NOT ([week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST'))
 
 
 	INSERT INTO #temp_all_games
-	SELECT DISTINCT o.pff_GSISPLAYERID AS gsis_player_id
-		,o.pff_GSISGAMEKEY AS gsis_game_key
-		,CAST(pff_GAMESEASON AS INT) AS season
-		,CASE WHEN pff_WEEK IN ('BG') THEN 100 
-				WHEN pff_WEEK IN ('CC') THEN 101
-				WHEN pff_WEEK IN ('FC') THEN 102
-				WHEN pff_WEEK IN ('PO') THEN 103
-				ELSE CAST([pff_WEEK] AS INT)
+	SELECT DISTINCT o.gsis_player_id AS gsis_player_id
+		,o.gsis_game_id AS gsis_game_key
+		,season
+		,CASE WHEN [week] IN ('BG') THEN 100 
+				WHEN [week] IN ('CC') THEN 101
+				WHEN [week] IN ('FC') THEN 102
+				WHEN [week] IN ('PO') THEN 103
+				ELSE CAST([week] AS INT)
 		END AS [week]
-	FROM Cff.dbo.PffPlays p
-	INNER JOIN Cff.dbo.PffDefense o
-		ON p.pff_PLAYID = o.pff_PLAYID
-	WHERE pff_WEEK NOT IN ('AS','AP','ASG','ASP','AG')
-		AND NOT (pff_WEEK IN ('16') AND (pff_OFFTEAM = 'SOUT' OR pff_DEFTEAM = 'SOUT' OR pff_DEFTEAM = 'EAST' OR pff_OFFTEAM = 'EAST'))
+	FROM daily_build_cff_plays p
+	INNER JOIN daily_build_cff_defense o
+		ON p.play_id = o.play_id
+	WHERE [week] NOT IN ('AS','AP','ASG','ASP','AG')
+		AND NOT ([week] IN ('16') AND (offense = 'SOUT' OR defense = 'SOUT' OR offense = 'EAST' OR defense = 'EAST'))
 
 
 	-- Check if #temp_distinct_games exists, if it does drop it
@@ -137,7 +141,7 @@ BEGIN
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON dg.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	WHERE pl.draft_year >= (SELECT MAX(season) FROM stage_games_pff_college) + 1
+	WHERE pl.draft_year >= (SELECT MAX(season) FROM daily_build_cff_plays) + 1
 
 
 	-- Check if #temp_plays_player_offensive_alignment exists, if it does drop it
@@ -146,8 +150,8 @@ BEGIN
 	
 	SELECT oa.*
 	INTO #temp_plays_player_offensive_alignment
-	FROM [stage_plays_play_ancillary_college] an
-	INNER JOIN [stage_plays_player_offensive_alignment_college] oa
+	FROM [college_play_ancillary_facts] an
+	INNER JOIN [college_player_play_offense_alignment_facts] oa
 		ON an.pff_play_id = oa.pff_play_id
 	INNER JOIN #temp_recent_games eg
 		ON oa.gsis_player_id = eg.gsis_player_id
@@ -161,8 +165,8 @@ BEGIN
 	
 	SELECT da.*
 	INTO #temp_plays_player_defensive_alignment
-	FROM [stage_plays_play_ancillary_college] an
-	INNER JOIN [stage_plays_player_defensive_alignment_college] da
+	FROM [college_play_ancillary_facts] an
+	INNER JOIN [college_player_play_defense_alignment_facts] da
 		ON an.pff_play_id = da.pff_play_id
 	INNER JOIN #temp_recent_games eg
 		ON da.gsis_player_id = eg.gsis_player_id
@@ -190,8 +194,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_blocking_stats
 
-    R INPUT TABLES:            
-		r_input_stats_blocking
+    OUTPUT TABLES:            
+		college_player_blocking_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -222,18 +226,18 @@ BEGIN
 		,qb_hurry_allowed
 		,beaten_by_defender
 	INTO #temp_plays_player_pass_block_college
-	FROM [stage_plays_player_pass_block_college] pb
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_blocking_facts] pb
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pb.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_results_college] res --The play results table
+	INNER JOIN [college_play_result_facts] res --The play results table
 		ON pb.pff_play_id = res.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pb.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pb.pff_play_id = ty.pff_play_id
-	INNER JOIN [stage_plays_play_run_college] ru --The play run table
+	INNER JOIN [college_play_running_facts] ru --The play run table
 		ON pb.pff_play_id = ru.pff_play_id
-	INNER JOIN [stage_plays_play_penalty_college] pp --The play penalty table
+	INNER JOIN [college_play_penalty_facts] pp --The play penalty table
 		ON pb.pff_play_id = pp.pff_play_id
 	WHERE (is_no_play = 0 OR (is_no_play = 1 AND penalty_offensive_holding_play = 1))
 		AND is_qb_kneel = 0
@@ -250,12 +254,18 @@ BEGIN
 	SELECT pb.gsis_player_id
 		,season
 		,season_type_adjusted
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN 1 ELSE 0 END) AS pass_block_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN 1 ELSE 0 END) AS pass_block_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) THEN 1 ELSE 0 END) AS pass_block_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') THEN 1 ELSE 0 END) AS run_block_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS run_block_exterior_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS run_block_oc_count
@@ -284,11 +294,11 @@ BEGIN
 		,0 AS rolling_game_stats
 	INTO #temp_player_blocking_stats
 	FROM #temp_plays_player_pass_block_college pb
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pb.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_offensive_alignment_college] oa --The player position table
+	INNER JOIN [college_player_play_offense_alignment_facts] oa --The player position table
 		ON pb.pff_pp_id = oa.pff_pp_id
-	LEFT JOIN [stage_plays_player_grade_offense_college] gof --The player grade table
+	LEFT JOIN [college_player_play_offense_grade_facts] gof --The player grade table
 		ON pb.pff_pp_id = gof.pff_pp_id
 	GROUP BY pb.gsis_player_id
 		,season
@@ -308,14 +318,20 @@ BEGIN
 
 	INSERT INTO #temp_player_blocking_stats
 	SELECT pb.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN 1 ELSE 0 END) AS pass_block_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
-		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') THEN 1 ELSE 0 END) AS pass_block_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
+		--,SUM(CASE WHEN role_pff IN ('PASS BLOCK') AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) THEN 1 ELSE 0 END) AS pass_block_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS pass_block_exterior_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('TE') THEN 1 ELSE 0 END) AS pass_block_te_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LG','RG') THEN 1 ELSE 0 END) AS pass_block_og_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS pass_block_oc_count
+		,SUM(CASE WHEN role_pff IN ('PASS BLOCK') OR (role_pff <> 'PASS BLOCK' AND (qb_pressure_allowed = 1 OR qb_sack_allowed = 1 OR qb_hit_allowed = 1 OR qb_hurry_allowed = 1)) AND oa.position_blt IN ('LT') THEN 1 ELSE 0 END) AS pass_block_lt_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') THEN 1 ELSE 0 END) AS run_block_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND oa.position_blt IN ('LT','RT') THEN 1 ELSE 0 END) AS run_block_exterior_count
 		,SUM(CASE WHEN role_pff IN ('RUN BLOCK') AND oa.position_blt IN ('OC') THEN 1 ELSE 0 END) AS run_block_oc_count
@@ -343,11 +359,11 @@ BEGIN
 				ELSE 0 END) AS running_yards_created_sum
 		,1 AS rolling_game_stats
 	FROM #temp_plays_player_pass_block_college pb
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pb.pff_pp_id = pen.pff_pp_id
 	INNER JOIN #temp_plays_player_offensive_alignment oa --The player position table
 		ON pb.pff_pp_id = oa.pff_pp_id
-	LEFT JOIN [stage_plays_player_grade_offense_college] gof --The player grade table
+	LEFT JOIN [college_player_play_offense_grade_facts] gof --The player grade table
 		ON pb.pff_pp_id = gof.pff_pp_id
 	GROUP BY pb.gsis_player_id
 
@@ -358,32 +374,32 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_blocking
+	OUTPUT TABLES:
+		college_player_blocking_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_blocking_college]
+	DELETE FROM [college_player_blocking_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_blocking_college]
+	INSERT INTO [college_player_blocking_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,CASE WHEN position_blt IN ('OC','LOG','ROG','LOT','ROT') THEN 'OL'
-			WHEN position_blt IN ('TE','FB','WR') THEN 'SKILL'
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('OC','LOG','ROG','LOT','ROT') THEN 'OL'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('TE','FB','WR') THEN 'SKILL'
 			ELSE NULL
 		END AS position_run_model
-		,CASE WHEN position_blt IN ('LOG','ROG') THEN 'OG'
-			WHEN position_blt IN ('LOT','ROT') THEN 'OT'
-			WHEN position_blt IN ('OC') THEN 'OC'
-			WHEN position_blt IN ('TE','FB','RB') THEN 'SKILL'
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('LOG','ROG') THEN 'OG'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('LOT','ROT') THEN 'OT'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('OC') THEN 'OC'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('TE','FB','RB') THEN 'SKILL'
 			ELSE NULL
 		END AS position_pass_model
-		,CASE WHEN position_blt IN ('LOG','ROG') THEN 'OG'
-			WHEN position_blt IN ('LOT','ROT') THEN 'OT'
-			ELSE position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('LOG','ROG') THEN 'OG'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('LOT','ROT') THEN 'OT'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_grade
 		,st.pass_block_count
 		,st.run_block_count
@@ -411,13 +427,23 @@ BEGIN
 		,CONVERT(NUMERIC(10,5),run_block_fb_count) / NULLIF(run_block_count,0) AS run_block_fb_pct
 		,rolling_game_stats
 	FROM #temp_player_blocking_stats st
-	LEFT JOIN [analysis_players_season_position_offense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
+		AND (pos.defense_type IS NULL OR pos.defense_type = 'ALL')
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND (pold.defense_type IS NULL OR pold.defense_type = 'ALL')
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players]  pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_blocking_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -442,8 +468,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_run_defense_stats
 
-    R INPUT TABLES:            
-		r_input_stats_run_defense
+    OUTPUT TABLES:            
+		college_player_run_defense_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -472,14 +498,14 @@ BEGIN
 		,yardage_adjustment
 		,rushing_yards_play_expected
 	INTO #temp_plays_player_grade_defense_college
-	FROM [stage_plays_player_grade_defense_college] pg
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_defense_grade_facts] pg
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pg.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pg.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pg.pff_play_id = ty.pff_play_id
-	INNER JOIN [stage_plays_play_results_college] re --The play results table
+	INNER JOIN [college_play_result_facts] re --The play results table
 		ON pg.pff_play_id = re.pff_play_id
 	LEFT JOIN [map_pff_grade_expected_rush_yards_adjustments] ya --The yard adjustment table
 		ON pg.pff_grade = ya.pff_grade
@@ -525,11 +551,11 @@ BEGIN
 		,SUM(CASE WHEN pg.pff_grade < 0 THEN 1 ELSE 0 END) AS run_defense_loss_sum
 	INTO #temp_player_run_defense_stats
 	FROM #temp_plays_player_grade_defense_college pg
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pg.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_tackle_college] ta --The player tackle table
+	INNER JOIN [college_player_play_tackling_facts] ta --The player tackle table
 		ON pg.pff_pp_id = ta.pff_pp_id
-	INNER JOIN [stage_plays_player_defensive_alignment_college] da --The player position table
+	INNER JOIN [college_player_play_defense_alignment_facts] da --The player position table
 		ON pg.pff_pp_id = da.pff_pp_id
 	--WHERE (is_no_play = 0 OR (is_no_play = 1 AND penalty_facemask = 1 OR penalty_horse_collar = 1))
 	GROUP BY pg.gsis_player_id
@@ -550,7 +576,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_run_defense_stats
 	SELECT pg.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,COUNT(pg.pff_pp_id) AS run_defense_count
 		,SUM(CASE WHEN da.position_blt IN ('NT') THEN 1 ELSE 0 END) AS run_defense_nt_count
@@ -576,9 +602,9 @@ BEGIN
 		,1 AS rolling_game_stats
 		,SUM(CASE WHEN pg.pff_grade < 0 THEN 1 ELSE 0 END) AS run_defense_loss_sum
 	FROM #temp_plays_player_grade_defense_college pg
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pg.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_tackle_college] ta --The player tackle table
+	INNER JOIN [college_player_play_tackling_facts] ta --The player tackle table
 		ON pg.pff_pp_id = ta.pff_pp_id
 	INNER JOIN #temp_plays_player_defensive_alignment da --The player position table
 		ON pg.pff_pp_id = da.pff_pp_id
@@ -592,28 +618,28 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_run_defense
+	OUTPUT TABLES:
+		college_player_run_defense_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_run_defense_college]
+	DELETE FROM [college_player_run_defense_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_run_defense_college]
+	INSERT INTO [college_player_run_defense_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,position_blt
-		,CASE WHEN position_blt IN ('NT','DT3T','DE5T') THEN 'DL'
-			WHEN position_blt IN ('DE43','OB34','RUSH','SAM') THEN 'EDGE'
-			WHEN position_blt IN ('MIKE','WILL') THEN 'IB'
+		,CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END AS position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('NT','DT3T','DE5T') THEN 'DL'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('DE43','OB34','RUSH','SAM') THEN 'EDGE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL') THEN 'IB'
 			ELSE NULL
 		END AS position_model
-		,CASE WHEN position_blt IN ('NT','DT3T','DE5T') THEN 'DL'
-			WHEN position_blt IN ('DE43','OB34','RUSH','SAM') THEN 'EDGE'
-			WHEN position_blt IN ('MIKE','WILL') THEN 'IB'
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)IN ('NT','DT3T','DE5T') THEN 'DL'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('DE43','OB34','RUSH','SAM') THEN 'EDGE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL') THEN 'IB'
 			ELSE NULL
 		END AS position_grade
 		,run_defense_count
@@ -632,15 +658,24 @@ BEGIN
 		,rolling_game_stats
 		,run_defense_loss_sum
 	FROM #temp_player_run_defense_stats st
-	LEFT JOIN [analysis_players_season_position_defense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
 		AND pos.defense_type = 'RUN'
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND pold.defense_type = 'RUN'
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players]  pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
-	WHERE position_blt IN ('NT','DT3T','DE5T','DE43','OB34','RUSH','SAM','MIKE','WILL')
+	WHERE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('NT','DT3T','DE5T','DE43','OB34','RUSH','SAM','MIKE','WILL')
+
+
+	DROP TABLE #temp_player_run_defense_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -672,8 +707,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_coverage_stats
 
-    R INPUT TABLES:            
-		r_input_stats_coverage
+    OUTPUT TABLES:            
+		college_player_coverage_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -712,16 +747,16 @@ BEGIN
 		,interception
 		,drop_by_covered_receiver
 	INTO #temp_plays_player_coverage_college
-	FROM [stage_plays_player_coverage_college] ppas
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_coverage_facts] ppas
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON ppas.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON ppas.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON ppas.pff_play_id = ty.pff_play_id
-	INNER JOIN [stage_plays_play_penalty_college] pp --The play penalty table
+	INNER JOIN [college_play_penalty_facts] pp --The play penalty table
 		ON ppas.pff_play_id = pp.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON ppas.pff_pp_id = pen.pff_pp_id
 	 WHERE (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1)))
 		AND is_pass = 1
@@ -741,22 +776,22 @@ BEGIN
 		,season_type_adjusted
 		,SUM(CASE WHEN pd.role_pff = 'COVERAGE' THEN 1 ELSE 0 END) AS play_count_pass_sum
 		,SUM(align_in_press) AS play_count_press_sum
-		,SUM(targeted_defender_primary) AS targeted_defender_primary_sum
-		,SUM(targeted_defender_secondary) AS targeted_defender_secondary_sum
-		,SUM(CASE WHEN targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
-		,SUM(responsible_for_coverage_safety) AS responsible_for_coverage_safety_sum
-		,SUM(completion_allowed_brv) AS completion_allowed_brv_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_primary ELSE 0 END) AS targeted_defender_primary_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_secondary ELSE 0 END) AS targeted_defender_secondary_sum
+		,SUM(CASE WHEN air_yards > 0 AND targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
+		,SUM(CASE WHEN air_yards > 0 THEN responsible_for_coverage_safety ELSE 0 END) AS responsible_for_coverage_safety_sum
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed_brv ELSE 0 END) AS completion_allowed_brv_sum
 		,SUM(CASE WHEN completion_allowed_brv = 1 AND penalty_defensive_holding = 1 THEN 5
 			WHEN completion_allowed_brv = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
-			WHEN completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
-			WHEN completion_allowed_brv = 1 THEN receiving_yards_play
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 THEN receiving_yards_play
 			ELSE 0 END)
 		AS completion_yards_allowed_brv_sum
-		,SUM(completion_allowed_brv_safety) AS completion_allowed_brv_safety_sum --Safeties dont have throws at 0 air yards counted against so need to exclude those
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed_brv_safety ELSE 0 END) AS completion_allowed_brv_safety_sum --Safeties dont have throws at 0 air yards counted against so need to exclude those
 		,SUM(CASE WHEN completion_allowed_brv_safety = 1 AND penalty_defensive_holding = 1 THEN 5
 			WHEN completion_allowed_brv_safety = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
-			WHEN completion_allowed_brv_safety = 1 AND incompletion_type = 'DROP' THEN air_yards
-			WHEN completion_allowed_brv_safety = 1 THEN receiving_yards_play
+			WHEN air_yards > 0 AND completion_allowed_brv_safety = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN air_yards > 0 AND completion_allowed_brv_safety = 1 THEN receiving_yards_play
 			ELSE 0 END)
 		AS completion_yards_allowed_brv_safety_sum
 		,SUM(CASE WHEN pass_break_up_brv = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_brv_sum
@@ -782,11 +817,11 @@ BEGIN
 		,0 AS rolling_game_stats
 	INTO #temp_player_coverage_stats
 	FROM #temp_plays_player_coverage_college ppas
-	INNER JOIN [stage_plays_play_results_college] re --The play results table
+	INNER JOIN [college_play_result_facts] re --The play results table
 		ON ppas.pff_play_id = re.pff_play_id
-	INNER JOIN [stage_plays_play_pass_college] pa --The play pass table
+	INNER JOIN [college_play_passing_facts] pa --The play pass table
 		ON ppas.pff_play_id = pa.pff_play_id
-	INNER JOIN [stage_plays_player_defensive_alignment_college] pd --The player position table
+	INNER JOIN [college_player_play_defense_alignment_facts] pd --The player position table
 		ON ppas.pff_pp_id = pd.pff_pp_id
 	GROUP BY ppas.gsis_player_id
 		,season
@@ -806,26 +841,26 @@ BEGIN
 	
 	INSERT INTO #temp_player_coverage_stats
 	SELECT ppas.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,SUM(CASE WHEN pd.role_pff = 'COVERAGE' THEN 1 ELSE 0 END) AS play_count_pass_sum
 		,SUM(align_in_press) AS play_count_press_sum
-		,SUM(targeted_defender_primary) AS targeted_defender_primary_sum
-		,SUM(targeted_defender_secondary) AS targeted_defender_secondary_sum
-		,SUM(CASE WHEN targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
-		,SUM(responsible_for_coverage_safety) AS responsible_for_coverage_safety_sum
-		,SUM(completion_allowed_brv) AS completion_allowed_brv_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_primary ELSE 0 END) AS targeted_defender_primary_sum
+		,SUM(CASE WHEN air_yards > 0 THEN targeted_defender_secondary ELSE 0 END) AS targeted_defender_secondary_sum
+		,SUM(CASE WHEN air_yards > 0 AND targeted_defender_primary = 1 OR targeted_defender_secondary = 1 THEN 1 ELSE 0 END) AS targeted_defender_sum
+		,SUM(CASE WHEN air_yards > 0 THEN responsible_for_coverage_safety ELSE 0 END) AS responsible_for_coverage_safety_sum
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed_brv ELSE 0 END) AS completion_allowed_brv_sum
 		,SUM(CASE WHEN completion_allowed_brv = 1 AND penalty_defensive_holding = 1 THEN 5
 			WHEN completion_allowed_brv = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
-			WHEN completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
-			WHEN completion_allowed_brv = 1 THEN receiving_yards_play
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN air_yards > 0 AND completion_allowed_brv = 1 THEN receiving_yards_play
 			ELSE 0 END)
 		AS completion_yards_allowed_brv_sum
-		,SUM(completion_allowed_brv_safety) AS completion_allowed_brv_safety_sum --Safeties dont have throws at 0 air yards counted against so need to exclude those
+		,SUM(CASE WHEN air_yards > 0 THEN completion_allowed_brv_safety ELSE 0 END) AS completion_allowed_brv_safety_sum --Safeties dont have throws at 0 air yards counted against so need to exclude those
 		,SUM(CASE WHEN completion_allowed_brv_safety = 1 AND penalty_defensive_holding = 1 THEN 5
 			WHEN completion_allowed_brv_safety = 1 AND penalty_defensive_pass_interference = 1 THEN penalty_yards_pff_play
-			WHEN completion_allowed_brv_safety = 1 AND incompletion_type = 'DROP' THEN air_yards
-			WHEN completion_allowed_brv_safety = 1 THEN receiving_yards_play
+			WHEN air_yards > 0 AND completion_allowed_brv_safety = 1 AND incompletion_type = 'DROP' THEN air_yards
+			WHEN air_yards > 0 AND completion_allowed_brv_safety = 1 THEN receiving_yards_play
 			ELSE 0 END)
 		AS completion_yards_allowed_brv_safety_sum
 		,SUM(CASE WHEN pass_break_up_brv = 1 OR interception = 1 THEN 1 ELSE 0 END) AS pass_break_up_brv_sum
@@ -850,9 +885,9 @@ BEGIN
 		,SUM(touchdown_play) AS team_touchdowns_allowed_on
 		,1 AS rolling_game_stats
 	FROM #temp_plays_player_coverage_college ppas
-	INNER JOIN [stage_plays_play_results_college] re --The play results table
+	INNER JOIN [college_play_result_facts] re --The play results table
 		ON ppas.pff_play_id = re.pff_play_id
-	INNER JOIN [stage_plays_play_pass_college] pa --The play pass table
+	INNER JOIN [college_play_passing_facts] pa --The play pass table
 		ON ppas.pff_play_id = pa.pff_play_id
 	INNER JOIN #temp_plays_player_defensive_alignment pd --The player position table
 		ON ppas.pff_pp_id = pd.pff_pp_id
@@ -865,27 +900,27 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_coverage
+	OUTPUT TABLES:
+		college_player_coverage_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_coverage_college]
+	DELETE FROM [college_player_coverage_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_coverage_college]
+	INSERT INTO [college_player_coverage_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,CASE WHEN pos.position_blt IN ('FS','SS') THEN 'DS'
-			ELSE pos.position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('FS','SS') THEN 'DS'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_blt
-		,CASE WHEN pos.position_blt IN ('FS','SS') THEN 'DS'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') AND pos.role_pff = 'RUSH' THEN 'EDGE'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
-			WHEN pos.position_blt IN ('CB','NB') THEN 'CB'
-			ELSE pos.position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('FS','SS') THEN 'DS'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') AND (CASE WHEN rolling_game_stats = 1 AND pos.role_pff IS NULL THEN pold.role_pff ELSE pos.role_pff END) = 'RUSH' THEN 'EDGE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('CB','NB') THEN 'CB'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_group_blt
 		,play_count_pass_sum
 		,play_count_press_sum
@@ -911,14 +946,23 @@ BEGIN
 		,team_touchdowns_allowed_on
 		,rolling_game_stats
 	FROM #temp_player_coverage_stats st
-	LEFT JOIN [analysis_players_season_position_defense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
 		AND pos.defense_type = 'PASS'
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND pold.defense_type = 'PASS'
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players]  pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_coverage_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -936,8 +980,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_pass_rush_stats
 
-    R INPUT TABLES:            
-		r_input_stats_pass_rush
+    OUTPUT TABLES:            
+		college_player_pass_rush_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1007,16 +1051,16 @@ BEGIN
 		AS qb_disruption_weight_4_sum
 		,0 AS rolling_game_stats
 	INTO #temp_player_pass_rush_stats
-	FROM [stage_plays_player_pass_rush_college] pr
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_pass_rush_facts] pr
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pr.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pr.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pr.pff_play_id = ty.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pr.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_defensive_alignment_college] pd --The player play alignment table
+	INNER JOIN [college_player_play_defense_alignment_facts] pd --The player play alignment table
 		ON pr.pff_pp_id = pd.pff_pp_id
 	 WHERE (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR drawn_offensive_holding = 1)))
 		AND is_pass = 1
@@ -1044,7 +1088,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_pass_rush_stats
 	SELECT pr.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		--,down
 		--,distance_bucket
@@ -1093,14 +1137,14 @@ BEGIN
 			END)
 		AS qb_disruption_weight_4_sum
 		,1 AS rolling_game_stats
-	FROM [stage_plays_player_pass_rush_college] pr
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_pass_rush_facts] pr
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pr.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pr.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pr.pff_play_id = ty.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pr.pff_pp_id = pen.pff_pp_id
 	INNER JOIN #temp_plays_player_defensive_alignment pd --The player play alignment table
 		ON pr.pff_pp_id = pd.pff_pp_id
@@ -1119,27 +1163,27 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_pass_rush
+	OUTPUT TABLES:
+		college_player_pass_rush_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_pass_rush_college]
+	DELETE FROM [college_player_pass_rush_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_pass_rush_college]
+	INSERT INTO [college_player_pass_rush_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,CASE WHEN pos.position_blt IN ('FS','SS') THEN 'DS'
-			ELSE pos.position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('FS','SS') THEN 'DS'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_blt
-		,CASE WHEN pos.position_blt IN ('FS','SS') THEN 'DS'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') AND pos.role_pff = 'RUSH' THEN 'EDGE'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
-			WHEN pos.position_blt IN ('DT3T','NT','DE5T') THEN 'DL'
-			ELSE pos.position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('FS','SS') THEN 'DS'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') AND (CASE WHEN rolling_game_stats = 1 AND pos.role_pff IS NULL THEN pold.role_pff ELSE pos.role_pff END) = 'RUSH' THEN 'EDGE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('DT3T','NT','DE5T') THEN 'DL'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_group_blt
 		,play_count_pass_sum
 		,drawn_offensive_holding_sum
@@ -1154,14 +1198,23 @@ BEGIN
 		,qb_disruption_weight_4_sum
 		,rolling_game_stats
 	FROM #temp_player_pass_rush_stats st
-	LEFT JOIN [analysis_players_season_position_defense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
 		AND pos.defense_type = 'PASS'
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND pold.defense_type = 'PASS'
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_pass_rush_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1193,8 +1246,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_receiving_stats
 
-    R INPUT TABLES:            
-		r_input_stats_receiving
+    OUTPUT TABLES:            
+		college_player_receiving_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1234,18 +1287,18 @@ BEGIN
 		,catch_probability
 		,expected_points_change_play
 	INTO #temp_player_receiving_college
-	FROM [stage_plays_player_receiving_college] rec
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_receiving_facts] rec
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON rec.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_results_college] res --The play results table
+	INNER JOIN [college_play_result_facts] res --The play results table
 		ON rec.pff_play_id = res.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON rec.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON rec.pff_play_id = ty.pff_play_id
-	INNER JOIN [stage_plays_play_penalty_college] pp --The play penalty table
+	INNER JOIN [college_play_penalty_facts] pp --The play penalty table
 		ON rec.pff_play_id = pp.pff_play_id
-	INNER JOIN [stage_plays_play_pass_college] pa --The play pass table
+	INNER JOIN [college_play_passing_facts] pa --The play pass table
 		ON rec.pff_play_id = pa.pff_play_id
 	WHERE (is_no_play = 0 OR (is_no_play = 1 AND (penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1)))
 		AND is_pass = 1
@@ -1292,14 +1345,14 @@ BEGIN
 		AS penalty_yards_drawn_sum
 		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN 1 ELSE 0 END) AS catch_probability_target_sum
 		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS catch_probability_sum
-		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND is_no_play = 0 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS receiving_epa_target_sum
-		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND is_no_play = 0 THEN expected_points_change_play ELSE 0 END) AS receiving_epa_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS receiving_epa_target_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS receiving_epa_sum
 		,0 AS rolling_game_stats
 	INTO #temp_player_receiving_stats
 	FROM #temp_player_receiving_college rec
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON rec.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_offensive_alignment_college] oa --The player position table
+	INNER JOIN [college_player_play_offense_alignment_facts] oa --The player position table
 		ON rec.pff_pp_id = oa.pff_pp_id
 	GROUP BY rec.gsis_player_id
 		,season
@@ -1319,7 +1372,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_receiving_stats
 	SELECT rec.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,SUM(CASE WHEN role_pff = 'PASS ROUTE' THEN 1 ELSE 0 END) AS play_count_route_sum
 		,SUM(bunched) AS play_count_bunched_sum
@@ -1350,11 +1403,11 @@ BEGIN
 		AS penalty_yards_drawn_sum
 		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN 1 ELSE 0 END) AS catch_probability_target_sum
 		,SUM(CASE WHEN targeted_receiver = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS catch_probability_sum
-		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND is_no_play = 0 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS receiving_epa_target_sum
-		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND is_no_play = 0 THEN expected_points_change_play ELSE 0 END) AS receiving_epa_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS receiving_epa_target_sum
+		,SUM(CASE WHEN targeted_receiver_catchable = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS receiving_epa_sum
 		,1 AS rolling_game_stats
 	FROM #temp_player_receiving_college rec
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON rec.pff_pp_id = pen.pff_pp_id
 	INNER JOIN #temp_plays_player_offensive_alignment oa --The player position table
 		ON rec.pff_pp_id = oa.pff_pp_id
@@ -1367,35 +1420,35 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_receiving
+	OUTPUT TABLES:
+		college_player_receiving_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_receiving_college]
+	DELETE FROM [college_player_receiving_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_receiving_college]
+	INSERT INTO [college_player_receiving_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,pos.position_blt
-		,pos.receiver_type
-		,CASE WHEN pos.position_blt IN ('WR','TE') THEN 'RCVR'
-			WHEN pos.position_blt IN ('RB','FB') THEN 'RB'
+		,CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END AS position_blt
+		,CASE WHEN rolling_game_stats = 1 AND pos.receiver_type IS NULL THEN pold.receiver_type ELSE pos.receiver_type END AS receiver_type
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('WR','TE') THEN 'RCVR'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('RB','FB') THEN 'RB'
 			ELSE NULL
 		END AS position_model
-		,CASE WHEN pos.position_blt IN ('WR','TE') AND pos.receiver_type IN ('WIDE') THEN 'WIDE'
-			WHEN (pos.position_blt IN ('WR','TE') AND pos.receiver_type IN ('SLOT')) OR (pos.position_blt IN ('WR') AND pos.receiver_type IN ('INSIDE')) THEN 'SLOT'
-			WHEN pos.position_blt IN ('TE') THEN 'TE'
-			WHEN pos.position_blt IN ('RB','FB') THEN 'RB'
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('WR','TE') AND (CASE WHEN rolling_game_stats = 1 AND pos.receiver_type IS NULL THEN pold.receiver_type ELSE pos.receiver_type END) IN ('WIDE') THEN 'WIDE'
+			WHEN ((CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('WR','TE') AND (CASE WHEN rolling_game_stats = 1 AND pos.receiver_type IS NULL THEN pold.receiver_type ELSE pos.receiver_type END) IN ('SLOT')) OR ((CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('WR') AND (CASE WHEN rolling_game_stats = 1 AND pos.receiver_type IS NULL THEN pold.receiver_type ELSE pos.receiver_type END) IN ('INSIDE')) THEN 'SLOT'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('TE') THEN 'TE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('RB','FB') THEN 'RB'
 			ELSE NULL
 		END AS position_grade
-		,CONVERT(NUMERIC(10,5),snap_count_slot) / (snap_count_slot+snap_count_flex+snap_count_inside+snap_count_wide) AS snap_pct_slot
-		,CONVERT(NUMERIC(10,5),snap_count_flex) / (snap_count_slot+snap_count_flex+snap_count_inside+snap_count_wide) AS snap_pct_flex
-		,CONVERT(NUMERIC(10,5),snap_count_inside) / (snap_count_slot+snap_count_flex+snap_count_inside+snap_count_wide) AS snap_pct_inside
-		,CONVERT(NUMERIC(10,5),snap_count_wide) / (snap_count_slot+snap_count_flex+snap_count_inside+snap_count_wide) AS snap_pct_wide
+		,CONVERT(NUMERIC(10,5),pos.snap_count_slot) / (pos.snap_count_slot + pos.snap_count_flex + pos.snap_count_inside + pos.snap_count_wide) AS snap_pct_slot
+		,CONVERT(NUMERIC(10,5),pos.snap_count_flex) / (pos.snap_count_slot + pos.snap_count_flex + pos.snap_count_inside + pos.snap_count_wide) AS snap_pct_flex
+		,CONVERT(NUMERIC(10,5),pos.snap_count_inside) / (pos.snap_count_slot + pos.snap_count_flex + pos.snap_count_inside + pos.snap_count_wide) AS snap_pct_inside
+		,CONVERT(NUMERIC(10,5),pos.snap_count_wide) / (pos.snap_count_slot + pos.snap_count_flex + pos.snap_count_inside + pos.snap_count_wide) AS snap_pct_wide
 		,play_count_route_sum
 		,play_count_bunched_sum
 		,play_count_motion_sum
@@ -1425,14 +1478,24 @@ BEGIN
 		,receiving_epa_target_sum
 		,receiving_epa_sum
 	FROM #temp_player_receiving_stats st
-	LEFT JOIN [analysis_players_season_position_offense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
+		AND (pos.defense_type IS NULL OR pos.defense_type = 'ALL')
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND (pold.defense_type IS NULL OR pold.defense_type = 'ALL')
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
 	WHERE pos.position_blt IN ('WR','TE','RB','FB')
+
+
+	DROP TABLE #temp_player_receiving_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1455,8 +1518,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_running_stats
 
-    R INPUT TABLES:            
-		r_input_stats_running
+    OUTPUT TABLES:            
+		college_player_running_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1499,16 +1562,16 @@ BEGIN
 		,scrambling_touchdown
 		,scrambling_fumble
 	INTO #temp_player_running_college
-	FROM [stage_plays_player_running_college] run
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_running_facts] run
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON run.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_results_college] res --The play results table
+	INNER JOIN [college_play_result_facts] res --The play results table
 		ON run.pff_play_id = res.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON run.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON run.pff_play_id = ty.pff_play_id
-	INNER JOIN [stage_plays_play_penalty_college] pp --The play penalty table
+	INNER JOIN [college_play_penalty_facts] pp --The play penalty table
 		ON run.pff_play_id = pp.pff_play_id
 	WHERE is_no_play = 0
 		AND (is_run = 1 OR is_scramble = 1)
@@ -1569,11 +1632,11 @@ BEGIN
 		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_fumble ELSE 0 END) AS scrambling_fumbles
 	INTO #temp_player_running_stats
 	FROM #temp_player_running_college run
-	INNER JOIN [stage_plays_play_run_college] ru --The play run table
+	INNER JOIN [college_play_running_facts] ru --The play run table
 		ON run.pff_play_id = ru.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON run.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_offensive_alignment_college] oa --The player position table
+	INNER JOIN [college_player_play_offense_alignment_facts] oa --The player position table
 		ON run.pff_pp_id = oa.pff_pp_id
 	GROUP BY run.gsis_player_id
 		,season
@@ -1593,7 +1656,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_running_stats
 	SELECT run.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,SUM(CASE WHEN role_pff IN ('RUN','RUN BLOCK') AND is_scramble = 0 THEN 1 ELSE 0 END) AS play_count_run_sum
 		,SUM(CASE WHEN role_pff IN ('RUN') AND is_scramble = 0 THEN 1 ELSE 0 END) AS run_sum
@@ -1637,9 +1700,9 @@ BEGIN
 		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_touchdown ELSE 0 END) AS scrambling_touchdowns
 		,SUM(CASE WHEN is_scramble = 1 AND scrambling_yards IS NOT NULL THEN scrambling_fumble ELSE 0 END) AS scrambling_fumbles
 	FROM #temp_player_running_college run
-	INNER JOIN [stage_plays_play_run_college] ru --The play run table
+	INNER JOIN [college_play_running_facts] ru --The play run table
 		ON run.pff_play_id = ru.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON run.pff_pp_id = pen.pff_pp_id
 	INNER JOIN #temp_plays_player_offensive_alignment oa --The player position table
 		ON run.pff_pp_id = oa.pff_pp_id
@@ -1652,20 +1715,20 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_running
+	OUTPUT TABLES:
+		college_player_running_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_running_college]
+	DELETE FROM [college_player_running_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_running_college]
+	INSERT INTO [college_player_running_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,pos.position_blt
+		,CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END AS position_blt
 		,play_count_run_sum
 		,run_sum
 		,run_no_2pt_sum
@@ -1708,13 +1771,23 @@ BEGIN
 		,scrambling_touchdowns
 		,scrambling_fumbles
 	FROM #temp_player_running_stats st
-	LEFT JOIN [analysis_players_season_position_offense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
+		AND (pos.defense_type IS NULL OR pos.defense_type = 'ALL')
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND (pold.defense_type IS NULL OR pold.defense_type = 'ALL')
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_running_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1732,8 +1805,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_tackle_stats
 
-    R INPUT TABLES:            
-		r_input_stats_tackling
+    OUTPUT TABLES:            
+		college_player_tackling_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1780,16 +1853,16 @@ BEGIN
 		,SUM(tackle_probability_derrick) AS tackle_probability_derrick_sum
 		,SUM(CASE WHEN is_run = 1 THEN tackle_or_assist ELSE 0 END) AS tackle_runs_sum
 	INTO #temp_player_tackle_stats
-	FROM [stage_plays_player_tackle_college] pt
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_tackling_facts] pt
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pt.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pt.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pt.pff_play_id = ty.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pt.pff_pp_id = pen.pff_pp_id
-	INNER JOIN [stage_plays_player_defensive_alignment_college] da
+	INNER JOIN [college_player_play_defense_alignment_facts] da
 		ON pt.pff_pp_id = da.pff_pp_id
 	WHERE (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference = 1 OR penalty_defensive_holding = 1 OR penalty_facemask = 1 OR penalty_horse_collar = 1))
 		AND is_qb_kneel = 0
@@ -1815,7 +1888,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_tackle_stats
 	SELECT pt.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,COUNT(pt.pff_pp_id) AS play_count_sum
 		,SUM(CASE WHEN is_run = 1 THEN 1 ELSE 0 END) AS play_count_run_sum
@@ -1841,14 +1914,14 @@ BEGIN
 		,SUM(CASE WHEN role_pff = 'COVERAGE' THEN 1 ELSE 0 END) AS play_count_coverage_sum
 		,SUM(tackle_probability_derrick) AS tackle_probability_derrick_sum
 		,SUM(CASE WHEN is_run = 1 THEN tackle_or_assist ELSE 0 END) AS tackle_runs_sum
-	FROM [stage_plays_player_tackle_college] pt
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_tackling_facts] pt
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON pt.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON pt.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON pt.pff_play_id = ty.pff_play_id
-	LEFT JOIN [stage_plays_player_penalty_college] pen --The player penalty table
+	LEFT JOIN [college_player_play_penalty_facts] pen --The player penalty table
 		ON pt.pff_pp_id = pen.pff_pp_id
 	INNER JOIN #temp_plays_player_defensive_alignment da --The player position table
 		ON pt.pff_pp_id = da.pff_pp_id
@@ -1865,31 +1938,31 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_tackling
+	OUTPUT TABLES:
+		college_player_tackling_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_tackling_college]
+	DELETE FROM [college_player_tackling_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_tackling_college]
+	INSERT INTO [college_player_tackling_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,position_blt
-		,CASE WHEN pos.position_blt IN ('FS','SS') THEN 'DS'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') AND pos.role_pff = 'RUSH' THEN 'EDGE'
-			WHEN pos.position_blt IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
-			WHEN pos.position_blt IN ('CB','NB') THEN 'CB'
-			ELSE pos.position_blt
+		,CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END AS position_blt
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('FS','SS') THEN 'DS'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') AND (CASE WHEN rolling_game_stats = 1 AND pos.role_pff IS NULL THEN pold.role_pff ELSE pos.role_pff END) = 'RUSH' THEN 'EDGE'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('MIKE','WILL','SAM','RUSH','DE43') THEN 'COVG LB'
+			WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('CB','NB') THEN 'CB'
+			ELSE (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END)
 		END AS position_group_blt
 		,play_count_sum	
 		,play_count_run_sum
-		,CASE WHEN pos.position_blt IN ('CB','NB') THEN tackle_assist_sum_cb ELSE tackle_assist_sum	END AS tackle_assist_sum
-		,CASE WHEN pos.position_blt IN ('CB','NB') THEN tackle_4_way_sum_cb ELSE tackle_4_way_sum END AS tackle_4_way_sum
-		,CASE WHEN pos.position_blt IN ('CB','NB') THEN tackle_probability_sum_cb ELSE tackle_probability_sum END AS tackle_probability_sum
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('CB','NB') THEN tackle_assist_sum_cb ELSE tackle_assist_sum	END AS tackle_assist_sum
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('CB','NB') THEN tackle_4_way_sum_cb ELSE tackle_4_way_sum END AS tackle_4_way_sum
+		,CASE WHEN (CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END) IN ('CB','NB') THEN tackle_probability_sum_cb ELSE tackle_probability_sum END AS tackle_probability_sum
 		,stop_pff_sum
 		,stop_brv_sum
 		,run_stop_pff_sum
@@ -1907,14 +1980,23 @@ BEGIN
 		,tackle_probability_derrick_sum
 		,tackle_runs_sum
 	FROM #temp_player_tackle_stats st
-	LEFT JOIN [analysis_players_season_position_defense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
 		AND pos.defense_type = 'ALL'
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND pold.defense_type = 'ALL'
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_tackle_stats
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1931,8 +2013,8 @@ BEGIN
 	TEMP TABLES:
 		#temp_player_passing_stats
 
-    R INPUT TABLES:            
-		r_input_stats_passing
+    OUTPUT TABLES:            
+		college_player_passing_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1979,14 +2061,14 @@ BEGIN
 		,passing_fumble
 		,passing_batted_pass
 	INTO #temp_player_passing_college
-	FROM [stage_plays_player_passing_college] ps
-	INNER JOIN [stage_plays_play_ancillary_college] an --The play ancillary table
+	FROM [college_player_play_passing_facts] ps
+	INNER JOIN [college_play_ancillary_facts] an --The play ancillary table
 		ON ps.pff_play_id = an.pff_play_id
-	INNER JOIN [stage_plays_play_context_college] co --The play context table
+	INNER JOIN [college_play_context_facts] co --The play context table
 		ON ps.pff_play_id = co.pff_play_id
-	INNER JOIN [stage_plays_play_type_college] ty --The play type table
+	INNER JOIN [college_play_type_facts] ty --The play type table
 		ON ps.pff_play_id = ty.pff_play_id
-	LEFT JOIN [stage_plays_play_penalty_college] pen --The play penalty table
+	LEFT JOIN [college_play_penalty_facts] pen --The play penalty table
 		ON ps.pff_play_id = pen.pff_play_id
 	WHERE is_two_point_conversion = 0
 		AND (is_no_play = 0 OR (is_no_play = 1 AND penalty_defensive_pass_interference_play = 1 OR penalty_defensive_holding_play = 1 OR penalty_illegal_contact_play = 1))
@@ -2030,15 +2112,13 @@ BEGIN
 		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS passing_catch_probability_sum
 		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN passing_completion ELSE 0 END) AS passing_catch_probability_completion_sum
 		,0 AS rolling_game_stats
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 THEN expected_points_change_play ELSE 0 END) AS passing_epa_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND passing_attempt_no_throw_aways = 1 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_no_throw_aways_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND passing_attempt_no_throw_aways = 1 THEN expected_points_change_play ELSE 0 END) AS passing_epa_no_throw_aways_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS passing_epa_sum
 	INTO #temp_player_passing_stats
 	FROM #temp_player_passing_college ps
-	INNER JOIN [stage_plays_play_results_college] re --The play results table
+	INNER JOIN [college_play_result_facts] re --The play results table
 		ON ps.pff_play_id = re.pff_play_id
-	INNER JOIN [stage_plays_play_pass_college] pp --The play pass table
+	INNER JOIN [college_play_passing_facts] pp --The play pass table
 		ON ps.pff_play_id = pp.pff_play_id
 	GROUP BY ps.gsis_player_id
 		,season
@@ -2058,7 +2138,7 @@ BEGIN
 	
 	INSERT INTO #temp_player_passing_stats
 	SELECT ps.gsis_player_id
-		,(SELECT MAX(season) FROM stage_plays_play_ancillary_college WHERE season_type_adjusted = 'REGPOST') AS season
+		,(SELECT MAX(season) FROM college_play_ancillary_facts WHERE season_type_adjusted = 'REGPOST') AS season
 		,'REGPOST' AS season_type_adjusted
 		,COUNT(ps.pff_pp_id) AS play_count_sum
 		,SUM(CASE WHEN is_pass = 1 THEN 1 ELSE 0 END) AS pass_play_sum
@@ -2086,14 +2166,12 @@ BEGIN
 		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 THEN catch_probability ELSE 0 END) AS passing_catch_probability_sum
 		,SUM(CASE WHEN passing_attempt = 1 AND is_no_play = 0 AND catch_probability IS NOT NULL THEN passing_completion ELSE 0 END) AS passing_catch_probability_completion_sum
 		,1 AS rolling_game_stats
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 THEN expected_points_change_play ELSE 0 END) AS passing_epa_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND passing_attempt_no_throw_aways = 1 AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_no_throw_aways_sum
-		,SUM(CASE WHEN passer = 1 AND is_no_play = 0 AND passing_attempt_no_throw_aways = 1 THEN expected_points_change_play ELSE 0 END) AS passing_epa_no_throw_aways_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) AND expected_points_change_play IS NOT NULL THEN 1 ELSE 0 END) AS passing_epa_attempt_sum
+		,SUM(CASE WHEN passer = 1 AND (is_no_play = 0 OR (is_no_play = 1 AND expected_points_change_play > 0)) THEN expected_points_change_play ELSE 0 END) AS passing_epa_sum
 	FROM #temp_player_passing_college ps
-	INNER JOIN [stage_plays_play_results_college] re --The play results table
+	INNER JOIN [college_play_result_facts] re --The play results table
 		ON ps.pff_play_id = re.pff_play_id
-	INNER JOIN [stage_plays_play_pass_college] pp --The play pass table
+	INNER JOIN [college_play_passing_facts] pp --The play pass table
 		ON ps.pff_play_id = pp.pff_play_id
 	INNER JOIN #temp_plays_player_offensive_alignment oa --The player position table
 		ON ps.pff_pp_id = oa.pff_pp_id
@@ -2106,20 +2184,20 @@ BEGIN
 
 	Add the position columns
 
-	R INPUT TABLES:
-		r_input_stats_passing
+	OUTPUT TABLES:
+		college_player_passing_stats
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DELETE FROM [r_input_stats_passing_college]
+	DELETE FROM [college_player_passing_stats]
 	WHERE season >= @iSeason
 
-	INSERT INTO [r_input_stats_passing_college]
+	INSERT INTO [college_player_passing_stats]
 	SELECT st.gsis_player_id
 		,st.season
 		,st.season_type_adjusted
 		,CONCAT(last_name,', ',goes_by) AS player
-		,position_blt
+		,CASE WHEN rolling_game_stats = 1 AND pos.position_blt IS NULL THEN pold.position_blt ELSE pos.position_blt END AS position_blt
 		,pass_play_sum
 		,passer_sum
 		,quarterback_sum
@@ -2147,16 +2225,26 @@ BEGIN
 		,rolling_game_stats
 		,passing_epa_attempt_sum
 		,passing_epa_sum
-		,passing_epa_attempt_no_throw_aways_sum
-		,passing_epa_no_throw_aways_sum
 	FROM #temp_player_passing_stats st
-	LEFT JOIN [analysis_players_season_position_offense_college] pos
+	LEFT JOIN [college_player_season_positions] pos
 		ON st.gsis_player_id = pos.gsis_player_id
 		AND st.season = pos.season
 		AND st.season_type_adjusted = pos.season_type_adjusted
+		AND (pos.defense_type IS NULL OR pos.defense_type = 'ALL')
+--Need to join previous season for when rolling game stats is 1 but player hasn't played
+	LEFT JOIN [college_player_season_positions] pold
+		ON st.gsis_player_id = pold.gsis_player_id
+		AND st.season = pold.season + 1
+		AND st.season_type_adjusted = pold.season_type_adjusted
+		AND (pold.defense_type IS NULL OR pold.defense_type = 'ALL')
 	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
 		ON st.gsis_player_id = pl.ncaa_gsis_id
 		AND pl.is_deleted = 0
+
+
+	DROP TABLE #temp_player_passing_stats
+
+
 
 
 	RETURN @oReturnCD
