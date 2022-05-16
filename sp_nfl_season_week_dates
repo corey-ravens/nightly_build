@@ -1,0 +1,265 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_nfl_season_week_dates]    Script Date: 5/16/2022 11:07:42 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_nfl_season_week_dates] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	nfl_season_week_dates
+Author:			Jeremy Parks
+Creation Date:	07/26/2016
+Description:       
+
+
+	Refreshes the season game week table.
+	
+			
+Input Parameters:
+	@iSeason - Only refresh the current season 
+	
+Output Parameters:
+	@oReturnCD 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+begin 
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(1)
+
+	Season week dates.
+
+	PERMANENT TABLES:
+	nfl_season_week_dates
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	--Declare program variables
+	declare           
+		@vMailSubject		NVARCHAR(100)   = NULL,
+        @vMailBody			NVARCHAR(MAX)   = NULL,
+        @vMailRecipients	NVARCHAR(MAX)   = NULL, 
+		@vMaxRows			INT, 
+		@vRowCounter		INT
+
+	-- Initialize variables
+	set @oReturnCD  = 0
+	set @vMailRecipients = 'Jeremy.Parks@ravens.nfl.net;Corey.Krawiec@ravens.nfl.net'
+
+	if OBJECT_ID('tempdb..#temp_game_week') IS NOT NULL
+		drop table #temp_game_week
+
+	select distinct 
+		gm.Week as [week], 
+		gm.Season as season, 
+		gm.Season_Type as season_type, 
+		gm.GameWeekBegin as nfl_game_week_begin, 
+		gm.GameWeekEnd as nfl_game_week_end, 
+		(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium') As max_game_date, 
+		(select MIN(Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium') As min_game_date, 
+		/*
+		-- Left in for Debugging purposes
+	
+		(CASE  
+			WHEN (gm.Week = 1 and Season_Type = 'Reg') THEN
+				'Reg'
+				--(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season_Type = 'Pre' and gm1.Week = (select MAX(gm2.Week) FROM ProDB.dbo.Game gm2 where gm2.Season_Type = 'Pre' and gm2.Season = gm1.Season) and gm1.Season = gm.Season and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') )
+			WHEN (gm.Week = 1 and Season_Type = 'Post') THEN
+				'Post'
+				--(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season_Type = 'Reg' and gm1.Week = (select MAX(gm2.Week) FROM ProDB.dbo.Game gm2 where gm2.Season_Type = 'Reg' and gm2.Season = gm1.Season) and gm1.Season = gm.Season and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC')  )
+			WHEN (gm.Week = 1 and Season_Type = 'Pre') THEN
+				'Pre'
+				--((select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') ) - 9)
+			ELSE 
+				'Other'
+				--(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') )
+			END ) As max_game_date_previous_week_case, 
+		*/
+		(CASE  
+			WHEN (gm.Week = 1 and Season_Type = 'Reg') THEN
+				(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season_Type = 'Pre' and gm1.Week = (select MAX(gm2.Week) FROM ProDB.dbo.Game gm2 where gm2.Season_Type = 'Pre' and gm2.Season = gm1.Season) and gm1.Season = gm.Season and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium')
+			WHEN (gm.Week = 1 and Season_Type = 'Post') THEN
+				(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season_Type = 'Reg' and gm1.Week = (select MAX(gm2.Week) FROM ProDB.dbo.Game gm2 where gm2.Season_Type = 'Reg' and gm2.Season = gm1.Season) and gm1.Season = gm.Season and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium' )
+			WHEN (gm.Week = 1 and Season_Type = 'Pre') OR (gm.Week = 2 and Season_Type = 'Pre' and gm.Season = 2011)  THEN
+				((select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium') - 8)
+			ELSE 
+				(select MAX (Game_Date) from  ProDB.dbo.Game gm1 where gm1.Season = gm.Season and gm1.Week = gm.Week -1  and gm1.Season_Type = gm.Season_Type and gm1.LeagueType = 'NFL' and gm1.Home_Team not in ('AFC', 'NFC') and gm1.Game_Site <> 'Aloha Stadium')
+			END ) As max_game_date_previous_week
+	into #temp_game_week
+	from ProDB.dbo.Game gm
+	where GameWeekBegin >= '1/1/1900' --and Season_Type = 'Reg'
+		and Season >= 1996
+		and LeagueType = 'NFL'
+		and Home_Team not in ('AFC', 'NFC')
+		and Game_Site <> 'Aloha Stadium'
+		-- Had to comment out specific bad data keys
+		and GameKey not in (18078, 26624, 54784, 56501, 56884, 18018, 18019, 144,  160, 88, 40, 56872)
+		and Season = @iSeason
+	group by Week, Season, Season_Type, GameWeekBegin, GameWeekEnd
+	order by GameWeekEnd
+
+	-- Add Team Week Columns
+	alter table #temp_game_week add team_week_begin datetime
+	alter table #temp_game_week add team_week_end datetime
+
+	-- Update Team Week Columns
+	update #temp_game_week  Set team_week_end = max_game_date  + '23:59:59'
+	update #temp_game_week  Set  team_week_begin = max_game_date_previous_week  + 1
+	-- Pre 2005 used 8 days for the preseason week.  2011 was the lock-out year and also used 8 days
+	update #temp_game_week  Set  team_week_begin = team_week_begin - 1 where ((season <= 2005 and season_type = 'Pre' and week = 1) or (season = 2011 and season_type = 'Pre' and week = 2) )
+
+	if OBJECT_ID('tempdb..#temp_problem_recs') is not null
+		drop table #temp_problem_recs
+
+	select distinct Season_type, season, week , COUNT(*) as rec_count, ROW_NUMBER () OVER (ORDER BY season)  as row_count
+	into #temp_problem_recs
+	from #temp_game_week 
+	group by Season_type, season, week 
+	having COUNT(*) > 1
+
+	if (0 < (select COUNT(*) from #temp_problem_recs)) begin 
+
+		set @oReturnCD  = 1 
+
+		set @vMailBody = 'Hello, '
+		set @vMailBody  += '<br><br>  The following weeks have a data issue in the ' + db_name() + ' database for the nfl_season_weeks table.  '
+		set @vMailBody  += '<br><br>  '
+
+		set @vRowCounter = 1
+		select @vMaxRows = MAX(row_count) from #temp_problem_recs
+
+		while @vRowCounter <= @vMaxRows begin
+
+			set @vMailBody += (select CAST (Season AS VARCHAR(100)) + ' ' + Season_Type + ' ' + Cast (Week AS VARCHAR(100)) + ' : Number of Recs = ' + Cast (rec_count AS VARCHAR(100)) from #temp_problem_recs where row_count = @vRowCounter)
+			set @vMailBody  += '<br>'
+
+			set @vRowCounter += 1
+
+		end
+
+		set @vMailSubject = @@SERVERNAME + ': ' + db_name() + ' ---- ' + ' nfl_season_weeks generation issue'
+		exec msdb..sp_send_dbmail @recipients     = @vMailRecipients
+			, @subject      = @vMailSubject
+			, @body         = @vMailBody
+			, @body_format  = 'HTML'
+			, @importance   = 'High'
+		 
+		goto proc_end
+
+	end
+
+	
+	delete from nfl_season_week_dates where season = @iSeason 
+
+	insert into nfl_season_week_dates
+		(season, 
+		season_type, 
+		week, 
+		nfl_game_week_begin, 
+		nfl_game_week_end, 
+		team_week_begin, 
+		team_week_end, 
+		min_game_date, 
+		max_game_date)
+	select 
+		season, 
+		season_type, 
+		week, 
+		nfl_game_week_begin, 
+		nfl_game_week_end, 
+		team_week_begin, 
+		team_week_end, 
+		min_game_date, 
+		max_game_date
+	from #temp_game_week
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)
+
+	NFL league year dates table.
+
+	PERMANENT TABLES:
+	nfl_league_year_dates
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_league_year_dates exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_league_year_dates') IS NOT NULL
+		DROP TABLE #temp_league_year_dates
+
+	SELECT season
+		,CASE WHEN [Description] = 'First Day of League Year' THEN 'league_year_start'
+			WHEN [Description] = 'First Day Regular Season' THEN 'regular_season_start'
+			WHEN [Description] = 'End Regular Season' THEN 'regular_season_end'
+		END AS date_type
+		,calendardate AS [date]
+	INTO #temp_league_year_dates
+	FROM ClubDB.dbo.Calendar
+	WHERE [Description] IN ('First Day of League Year','First Day Regular Season','End Regular Season')
+
+	INSERT INTO #temp_league_year_dates
+	SELECT season - 1 AS season
+		,'league_year_end' AS date_type
+		,DATEADD(D,-1,calendardate) AS [date]
+	FROM ClubDB.dbo.Calendar
+	WHERE [Description] IN ('First Day of League Year')
+
+
+	-- Check if #temp_league_year_dates_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_league_year_dates_pivot') IS NOT NULL
+		DROP TABLE #temp_league_year_dates_pivot
+
+	SELECT season
+		,[league_year_start]
+		,[league_year_end]
+		,[regular_season_start]
+		,[regular_season_end]
+	INTO #temp_league_year_dates_pivot
+	FROM (
+		SELECT season
+		,date_type
+		,[date]
+	FROM #temp_league_year_dates) up
+	PIVOT (MAX([date]) FOR date_type IN ([league_year_start],[league_year_end],[regular_season_start],[regular_season_end])) AS pvt
+
+
+
+	DELETE FROM nfl_league_year_dates WHERE season >= 1980
+
+	INSERT INTO nfl_league_year_dates
+	SELECT *
+	FROM #temp_league_year_dates_pivot
+	WHERE season >= 1980
+
+
+proc_end:
+	return @oReturnCD
+
+end
+
+
+GO
+
+
