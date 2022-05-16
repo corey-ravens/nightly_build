@@ -1,0 +1,513 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_daily_build_prep_play_facts]    Script Date: 5/16/2022 10:59:39 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_daily_build_prep_play_facts] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+Procedure Name:	sp_daily_build_prep_play_facts
+Author:			Corey Krawiec
+Creation Date:	11/11/2021
+Description:       
+
+	Create copies of all the PFF and CFF tables - they update frequently and you don't want to get caught mid update when this is running.
+
+	Also the college tables have issues matching the correct gsis_player_id sometimes.  This way you can pre-process and attach the correct ids.
+
+	There were multiple procedures that created temp tables on the fly, so it made more sense to just create permanent tables that procedures could pull
+	from rather than to keep doing it in each procedure.
+	
+	(1) Plays
+	(2) Defense
+	(3) Offense
+	(4) Special Teams
+	(5) Blocking
+
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+Modifications:
+Date         SE           Description
+**********************************************************************************/
+
+
+BEGIN 
+
+	SET @oReturnCD  = 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+
+	Plays tables.
+
+	
+	OUTPUT TABLES:
+		daily_build_cff_plays
+		daily_build_pff_plays
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	CFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_cff_plays
+
+	INSERT INTO daily_build_cff_plays
+	SELECT *
+	FROM [CFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+
+	ALTER INDEX ix_daily_build_cff_plays ON daily_build_cff_plays REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	PFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+		
+	TRUNCATE TABLE daily_build_pff_plays
+
+	INSERT INTO daily_build_pff_plays
+	SELECT *
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+
+	ALTER INDEX ix_daily_build_pff_plays ON daily_build_pff_plays REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Defense tables.
+
+	Delete any player plays that have a null gsis PLAY id IF that same play has other player plays with a gsis id. You don't want to take out
+	all plays with no gsis play id because that might just be due to a delay in PFF getting the ids.
+
+	Also join to BaneProductionAnalytics to find the ncaa_gsis_ids we are using for each player.  CFF sometimes has multiple gsis ids on the same player,
+	this step tries to remedy that.
+
+	OUTPUT TABLES:
+		daily_build_cff_defense
+		daily_build_pff_defense
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	CFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_cff_defense
+
+	INSERT INTO daily_build_cff_defense
+	SELECT de.*
+	FROM [CFFUltimate].[dbo].[defense] de
+	INNER JOIN daily_build_cff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_cff_defense_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_defense_extras') IS NOT NULL
+		DROP TABLE #temp_cff_defense_extras
+
+	SELECT play_id
+	INTO #temp_cff_defense_extras
+	FROM daily_build_cff_defense
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_cff_defense
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_cff_defense_extras)
+
+
+	UPDATE daily_build_cff_defense
+	SET gsis_player_id = iu.ncaa_gsis_id
+	FROM import_cff_player_id_matches iu
+	WHERE daily_build_cff_defense.player_id = iu.pff_player_id
+
+
+	ALTER INDEX ix_daily_build_cff_defense ON daily_build_cff_defense REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_cff_defense_extras
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	PFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_pff_defense
+
+	INSERT INTO daily_build_pff_defense
+	SELECT de.*
+	FROM [PFFUltimate].[dbo].[defense] de
+	INNER JOIN daily_build_pff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_pff_defense_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_defense_extras') IS NOT NULL
+		DROP TABLE #temp_pff_defense_extras
+
+	SELECT play_id
+	INTO #temp_pff_defense_extras
+	FROM daily_build_pff_defense
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_pff_defense
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_pff_defense_extras)
+
+
+	ALTER INDEX ix_daily_build_pff_defense ON daily_build_pff_defense REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_pff_defense_extras
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	Offense tables.
+
+	Delete any player plays that have a null gsis PLAY id IF that same play has other player plays with a gsis id. You don't want to take out
+	all plays with no gsis play id because that might just be due to a delay in PFF getting the ids.
+
+	Also join to BaneProductionAnalytics to find the ncaa_gsis_ids we are using for each player.  CFF sometimes has multiple gsis ids on the same player,
+	this step tries to remedy that.
+
+	OUTPUT TABLES:
+		daily_build_cff_offense
+		daily_build_pff_offense
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	CFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_cff_offense
+
+	INSERT INTO daily_build_cff_offense
+	SELECT de.*
+	FROM [CFFUltimate].[dbo].[offense] de
+	INNER JOIN daily_build_cff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_cff_offense_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_offense_extras') IS NOT NULL
+		DROP TABLE #temp_cff_offense_extras
+
+	SELECT play_id
+	INTO #temp_cff_offense_extras
+	FROM daily_build_cff_offense
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_cff_offense
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_cff_offense_extras)
+
+
+	UPDATE daily_build_cff_offense
+	SET gsis_player_id = iu.ncaa_gsis_id
+	FROM import_cff_player_id_matches iu
+	WHERE daily_build_cff_offense.player_id = iu.pff_player_id
+
+
+	ALTER INDEX ix_daily_build_cff_offense ON daily_build_cff_offense REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_cff_offense_extras
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	PFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_pff_offense
+
+	INSERT INTO daily_build_pff_offense
+	SELECT de.*
+	FROM [PFFUltimate].[dbo].[offense] de
+	INNER JOIN daily_build_pff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_pff_offense_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_offense_extras') IS NOT NULL
+		DROP TABLE #temp_pff_offense_extras
+
+	SELECT play_id
+	INTO #temp_pff_offense_extras
+	FROM daily_build_pff_offense
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_pff_offense
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_pff_offense_extras)
+
+
+	ALTER INDEX ix_daily_build_pff_offense ON daily_build_pff_offense REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	DROP TABLE #temp_pff_offense_extras
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Temp Cff Special table.
+
+	You also delete any player plays that have a null gsis id IF that same play has other player plays with a gsis id. You don't want to take out
+	all plays with no gsis play id because that might just be due to a delay in cff getting the ids.
+
+	TEMP TABLES:
+		#temp_cff_special
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	CFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_cff_special
+
+	INSERT INTO daily_build_cff_special
+	SELECT de.*
+	FROM [CFFUltimate].[dbo].[special] de
+	INNER JOIN daily_build_cff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_cff_special_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_special_extras') IS NOT NULL
+		DROP TABLE #temp_cff_special_extras
+
+	SELECT play_id
+	INTO #temp_cff_special_extras
+	FROM daily_build_cff_special
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_cff_special
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_cff_special_extras)
+
+
+	UPDATE daily_build_cff_special
+	SET gsis_player_id = iu.ncaa_gsis_id
+	FROM import_cff_player_id_matches iu
+	WHERE daily_build_cff_special.player_id = iu.pff_player_id
+
+
+	ALTER INDEX ix_daily_build_cff_special ON daily_build_cff_special REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	DROP TABLE #temp_cff_special_extras
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	PFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_pff_special
+
+	INSERT INTO daily_build_pff_special
+	SELECT de.*
+	FROM [PFFUltimate].[dbo].[special] de
+	INNER JOIN daily_build_pff_plays pl
+		ON de.play_id = pl.play_id
+
+
+	-- Check if #temp_pff_special_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_special_extras') IS NOT NULL
+		DROP TABLE #temp_pff_special_extras
+
+	SELECT play_id
+	INTO #temp_pff_special_extras
+	FROM daily_build_pff_special
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_pff_special
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_pff_special_extras)
+
+
+	ALTER INDEX ix_daily_build_pff_special ON daily_build_pff_special REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	DROP TABLE #temp_pff_special_extras
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Blocking tables.
+
+	
+	OUTPUT TABLES:
+		daily_build_cff_all_blocking
+		daily_build_pff_all_blocking
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	CFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_cff_all_blocking
+
+	INSERT INTO daily_build_cff_all_blocking
+	SELECT bl.*
+		,RANK() OVER (PARTITION BY bl.player_participation_id ORDER BY bl.display_order, bl.id) AS blocking_order
+	FROM [CFFUltimate].[dbo].[all_blocking] bl
+	INNER JOIN daily_build_cff_plays pl
+		ON bl.play_id = pl.play_id
+
+
+	-- Check if #temp_cff_all_blocking_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_all_blocking_extras') IS NOT NULL
+		DROP TABLE #temp_cff_all_blocking_extras
+
+	SELECT play_id
+	INTO #temp_cff_all_blocking_extras
+	FROM daily_build_cff_all_blocking
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_cff_all_blocking
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_cff_all_blocking_extras)
+
+
+	UPDATE daily_build_cff_all_blocking
+	SET gsis_player_id = iu.ncaa_gsis_id
+	FROM import_cff_player_id_matches iu
+	WHERE daily_build_cff_all_blocking.player_id = iu.pff_player_id
+
+
+	ALTER INDEX ix_daily_build_cff_all_blocking ON daily_build_cff_all_blocking REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	DROP TABLE #temp_cff_all_blocking_extras
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	PFF
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_pff_all_blocking
+
+	INSERT INTO daily_build_pff_all_blocking
+	SELECT bl.*
+		,RANK() OVER (PARTITION BY bl.player_participation_id ORDER BY bl.display_order, bl.id) AS blocking_order
+	FROM [PFFUltimate].[dbo].[all_blocking] bl
+	INNER JOIN daily_build_pff_plays pl
+		ON bl.play_id = pl.play_id
+
+
+	-- Check if #temp_pff_all_blocking_extras exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_pff_all_blocking_extras') IS NOT NULL
+		DROP TABLE #temp_pff_all_blocking_extras
+
+	SELECT play_id
+	INTO #temp_pff_all_blocking_extras
+	FROM daily_build_pff_all_blocking
+	GROUP BY play_id
+	HAVING COUNT(DISTINCT ISNULL(gsis_play_id,-999)) > 1
+	
+
+	DELETE
+	FROM daily_build_pff_all_blocking
+	WHERE gsis_play_id IS NULL
+		AND play_id IN (SELECT play_id FROM #temp_pff_all_blocking_extras)
+
+
+	ALTER INDEX ix_daily_build_pff_all_blocking ON daily_build_pff_all_blocking REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_pff_all_blocking_extras
+
+
+
+	RETURN @oReturnCD
+
+END
+
+
+
+
+
+GO
+
+
