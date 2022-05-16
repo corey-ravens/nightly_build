@@ -1,0 +1,796 @@
+USE [AnalyticsDevelopment]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_daily_build_prep_non_pro_tables]    Script Date: 5/16/2022 10:53:50 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_daily_build_prep_non_pro_tables] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+Procedure Name:	sp_daily_build_prep_non_pro_tables
+Author:			Corey Krawiec
+Creation Date:	11/11/2021
+Description:       
+
+	Prep all the NonPro tables for the nightly build.  The tables are messy so we do a few things to correct them - fix wonky data,
+	add other play data onto specific rows, get rid of all star games, remove bad player ids, update gsis player ids to the correct
+	ones based on ncaa_matches.
+	
+	(1) NonPro play stats
+	(2) Defense game stats
+	(3) Receiving game stats
+	(4) Rushing game stats
+	(5) Returns game stats
+	(6) Passing game stats
+	(7) Kickoffs game stats
+	(8) Punting game stats
+	(9) Placekicking game stats
+
+
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+Modifications:
+Date         SE           Description
+**********************************************************************************/
+
+
+BEGIN 
+
+	SET @oReturnCD  = 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1)
+
+
+	Plays tables.
+
+	You want to use NonPro for only games that don't appear in CFF. So, create a daily build table that only has GameKeys that don't appear in CFF.  As games get added
+	to CFF, they will get removed from here and should update in the stats tables accordingly.
+
+	Also find the all star game club codes so you can exclude those games.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_play_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Check if #temp_cff_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cff_games') IS NOT NULL
+		DROP TABLE #temp_cff_games
+
+	SELECT DISTINCT gsis_game_id
+	INTO #temp_cff_games
+	FROM daily_build_cff_plays
+
+
+	-- Check if #temp_all_star_clubs exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_all_star_clubs') IS NOT NULL
+		DROP TABLE #temp_all_star_clubs
+
+	SELECT ClubKey
+	INTO #temp_all_star_clubs
+	FROM NonProDB.dbo.Club cl
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON cl.TeamCode = sc.code
+	WHERE cl.Division = 'other'
+
+
+	-- Check if #temp_fix_gsis_ids exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_fix_gsis_ids') IS NOT NULL
+		DROP TABLE #temp_fix_gsis_ids
+
+	SELECT DISTINCT pe.CollegePlayerID
+		,pl.ncaa_gsis_id
+		,pg.id AS bane_player_id_good
+		,pg.ncaa_gsis_id AS ncaa_gsis_id_good
+	INTO #temp_fix_gsis_ids
+	FROM NonProDB.dbo.CollegePlayerExtract pe
+	INNER JOIN BaneProductionAnalytics.dbo.ncaa_matches nm
+		ON pe.CollegePlayerID = nm.ncaa_id
+	LEFT JOIN BaneProductionAnalytics.dbo.players pl
+		ON nm.player_id = pl.id
+	LEFT JOIN BaneProductionAnalytics.dbo.players pg
+		ON pe.CollegePlayerID = pg.ncaa_id
+		AND pg.is_deleted = 0
+	WHERE pl.ncaa_gsis_id <> pg.ncaa_gsis_id
+
+	
+	-- Check if #temp_non_pro_fumble_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_non_pro_fumble_plays') IS NOT NULL
+		DROP TABLE #temp_non_pro_fumble_plays
+
+	SELECT DISTINCT ps.GameKey
+		,PlayID
+		,1 AS fumble_play
+	INTO #temp_non_pro_fumble_plays
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	WHERE StatName IN ('Fumble - Forced','Fumble - Not Forced')
+		AND Season >= @iSeason
+
+
+	-- Check if #temp_bad_pass_lengths exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_bad_pass_lengths') IS NOT NULL
+		DROP TABLE #temp_bad_pass_lengths
+
+	SELECT DISTINCT ps.GameKey
+		,PlayID
+	INTO #temp_bad_pass_lengths
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	WHERE StatName IN ('Pass Length, Completion','Pass Length, No Completion')
+		AND Yards <= -10
+		AND Season >= @iSeason
+
+
+	-- Check if #temp_air_yards_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_air_yards_plays') IS NOT NULL
+		DROP TABLE #temp_air_yards_plays
+
+	SELECT ps.GameKey
+		,ps.PlayID
+		,MAX(Yards) AS air_yards
+	INTO #temp_air_yards_plays
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	LEFT JOIN #temp_bad_pass_lengths bl
+		ON ps.GameKey = bl.GameKey
+		AND ps.PlayID = bl.PlayID
+	WHERE StatName IN ('Pass Length, Completion','Pass Length, No Completion')
+		AND bl.GameKey IS NULL
+		AND Season >= @iSeason
+	GROUP BY ps.GameKey
+		,ps.PlayID
+
+
+	-- Check if #temp_return_yards_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_return_yards_plays') IS NOT NULL
+		DROP TABLE #temp_return_yards_plays
+
+	SELECT ps.GameKey
+		,ps.PlayID
+		,CASE WHEN STPlayType = 5 THEN 1 ELSE 0 END AS is_kickoff
+		,CASE WHEN STPlayType = 3 THEN 1 ELSE 0 END AS is_punt
+		,SUM(Yards) AS return_yards
+	INTO #temp_return_yards_plays
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN [NonProDB].[dbo].[PlayList] pl
+		ON ps.GameKey = pl.GameKey
+		AND PS.PlayID = pl.PlayID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	WHERE UPPER(PlayDescription) NOT LIKE '%BLOCKED%'
+		AND ((STPlayType = 3 AND StatName IN ('Punt Return Yards, TD')) OR (STPlayType = 5 AND StatName IN ('Kickoff Return Yards, TD')))
+		AND Season >= @iSeason
+	GROUP BY ps.GameKey
+		,ps.PlayID
+		,STPlayType
+
+	INSERT INTO #temp_return_yards_plays
+	SELECT ps.GameKey
+		,ps.PlayID
+		,CASE WHEN STPlayType = 5 THEN 1 ELSE 0 END AS is_kickoff
+		,CASE WHEN STPlayType = 3 THEN 1 ELSE 0 END AS is_punt
+		,SUM(Yards) AS return_yards
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	LEFT JOIN #temp_return_yards_plays rp
+		ON ps.GameKey = rp.GameKey
+		AND ps.PlayID = rp.PlayID
+	INNER JOIN [NonProDB].[dbo].[PlayList] pl
+		ON ps.GameKey = pl.GameKey
+		AND PS.PlayID = pl.PlayID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	WHERE UPPER(PlayDescription) NOT LIKE '%BLOCKED%'
+		AND ((STPlayType = 3 AND StatName IN ('Punt Return Yards')) OR (STPlayType = 5 AND StatName IN ('Kickoff Return Yards')))
+		AND Season >= @iSeason
+		AND rp.GameKey IS NULL
+	GROUP BY ps.GameKey
+		,ps.PlayID
+		,STPlayType
+
+
+	-- Check if #temp_run_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_run_plays') IS NOT NULL
+		DROP TABLE #temp_run_plays
+
+	SELECT DISTINCT ps.GameKey
+		,ps.PlayID
+	INTO #temp_run_plays
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	WHERE StatName IN ('Rushing Yards','Rushing Yards - Minus','Rushing Yards, TD','2 Point Rush - Failed','Rushing Yards, No Rush')
+		AND Season >= @iSeason
+
+
+
+--Truncate table and insert data
+	TRUNCATE TABLE daily_build_non_pro_play_stats
+
+	INSERT INTO daily_build_non_pro_play_stats
+	SELECT ps.*
+		,ga.Season AS season
+		,LTRIM(RTRIM(st.StatName)) AS stat_name
+		,LTRIM(RTRIM(st.CategoryName)) AS category_name
+		,pl.PlayDescription
+		,pl.[Quarter]
+		,pl.ClockTime
+		,pl.Down
+		,pl.YardsToGo
+		,pl.AbsoluteYardLine
+		,pl.YardLine
+		,pl.IsGoalToGo
+		,pl.PlayType
+		,pl.SpecialTeamsPlay
+		,pl.STPlayType
+		,CASE WHEN pl.PlayDescription LIKE '%NO PLAY%' THEN 1 ELSE 0 END AS is_no_play
+		,CASE WHEN pl.PlayDescription LIKE '%TWO POINT CONVER%' THEN 1 ELSE 0 END AS is_two_point_conversion
+		,fu.fumble_play
+		,ay.air_yards
+		,CASE WHEN is_punt = 1 THEN ISNULL(rp.return_yards,0) ELSE NULL END AS punt_return_yards
+		,CASE WHEN is_kickoff = 1 THEN ISNULL(rp.return_yards,0) ELSE NULL END AS kickoff_return_yards
+		,CASE WHEN bl.GameKey IS NOT NULL THEN 1 ELSE 0 END AS bad_pass_length_flag
+		,CASE WHEN ru.GameKey IS NOT NULL THEN 1 ELSE 0 END AS is_run
+	FROM [NonProDB].[dbo].[PlayStat] ps
+	INNER JOIN NonProDB.dbo.Game ga
+		ON ps.GameKey = ga.GameKey
+	INNER JOIN [ClubDB].[dbo].[Stat] st
+		ON ps.StatID = st.Stat_ID
+	INNER JOIN [NonProDB].[dbo].[PlayList] pl
+		ON ps.GameKey = pl.GameKey
+		AND ps.PlayID = pl.PlayID
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON ps.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_non_pro_fumble_plays fu
+		ON ps.GameKey = fu.GameKey
+		AND ps.PlayID = fu.PlayID
+	LEFT JOIN #temp_air_yards_plays ay
+		ON ps.GameKey = ay.GameKey
+		AND ps.PlayID = ay.PlayID
+	LEFT JOIN #temp_return_yards_plays rp
+		ON ps.GameKey = rp.GameKey
+		AND ps.PlayID = rp.PlayID
+	LEFT JOIN #temp_bad_pass_lengths bl
+		ON ps.GameKey = bl.GameKey
+		AND ps.PlayID = bl.PlayID
+	LEFT JOIN #temp_run_plays ru
+		ON ps.GameKey = ru.GameKey
+		AND ps.PlayID = ru.PlayID
+	LEFT JOIN #temp_cff_games cf
+		ON ps.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON ps.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND ps.PlayerID NOT LIKE '%[^0-9]%'
+		AND ps.PlayerID NOT LIKE ''
+		AND ps.PlayerID IS NOT NULL
+		AND ps.PlayerID <> '0'
+		AND cf.gsis_game_id IS NULL
+		AND ac.ClubKey IS NULL
+		
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_play_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_play_stats.PlayerID = fi.ncaa_gsis_id
+	
+
+	ALTER INDEX ix_daily_build_non_pro_play_stats ON daily_build_non_pro_play_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	DROP TABLE #temp_non_pro_fumble_plays
+	DROP TABLE #temp_air_yards_plays
+	DROP TABLE #temp_return_yards_plays
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Defense game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_defense_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_defense_stats
+
+	INSERT INTO daily_build_non_pro_defense_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Tackles]
+		,[Assists]
+		,[Sacks]
+		,[SackYardage]
+		,[Interceptions]
+		,[PassDefences]
+		,[ForcedFumbles]
+		,[FumbleRecoveries]
+		,[STTackles]
+		,[STAssists]
+		,[STForcedFumbles]
+		,[STFumbleRecoveries]
+		,[STBlocks]
+		,[MiscTackles]
+		,[MiscAssists]
+		,[MiscForcedFumbles]
+		,[MiscFumbleRecoveries]
+		,de.[Clubkey]
+		,[QuarterbackHits]
+		,[TacklesForALoss]
+		,[TacklesForALossYards]
+	FROM NonProDB.dbo.Defensive de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_defense_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_defense_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_defense_stats ON daily_build_non_pro_defense_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3)
+
+
+	Receiving game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_receiving_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_receiving_stats
+
+	INSERT INTO daily_build_non_pro_receiving_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Receptions]
+		,[Yards]
+		,[Long]
+		,[LongTDReception]
+		,[Touchdowns]
+		,de.[Clubkey]
+		,[TwoPointAttempts]
+		,[TwoPointConversions]
+		,[PassTarget]
+		,[YardsAfterCatch]
+	FROM NonProDB.dbo.Receiving de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_receiving_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_receiving_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_receiving_stats ON daily_build_non_pro_receiving_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Rushing game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_rushing_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_rushing_stats
+
+	INSERT INTO daily_build_non_pro_rushing_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Attempts]
+		,[Yards]
+		,[Long]
+		,[LongTDRush]
+		,[Touchdowns]
+		,de.[Clubkey]
+		,[TwoPointAttempts]
+		,[TwoPointConversions]
+	FROM NonProDB.dbo.Rushing de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_rushing_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_rushing_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_rushing_stats ON daily_build_non_pro_rushing_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Returns game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_returns_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_returns_stats
+
+	INSERT INTO daily_build_non_pro_returns_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[ReturnType]
+		,[Number]
+		,[Yards]
+		,[Long]
+		,[LongTDReturn]
+		,[Touchdowns]
+		,[FairCatches]
+		,de.[Clubkey]
+	FROM NonProDB.dbo.[Returns] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_returns_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_returns_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_returns_stats ON daily_build_non_pro_returns_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+
+	Passing game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_passing_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_passing_stats
+
+	INSERT INTO daily_build_non_pro_passing_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Attempts]
+		,[Completions]
+		,[Yards]
+		,[Long]
+		,[LongTDPass]
+		,[Touchdowns]
+		,[Interceptions]
+		,[Sacks]
+		,[SackYardage]
+		,[QBRating]
+		,de.[Clubkey]
+		,[TwoPointAttempts]
+		,[TwoPointConversions]
+	FROM NonProDB.dbo.[Passing] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_passing_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_passing_stats.PlayerID = fi.ncaa_gsis_id
+
+	
+	ALTER INDEX ix_daily_build_non_pro_passing_stats ON daily_build_non_pro_passing_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+
+	Kiickoffs game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_kickoff_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_kickoff_stats
+
+	INSERT INTO daily_build_non_pro_kickoff_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Number]
+		,[Yards]
+		,[Touchbacks]
+		,[Inside20]
+		,[OutOfBounds]
+		,[ReachedEndZone]
+		,[ReturnYards]
+		,de.[ClubKey]
+	FROM NonProDB.dbo.[Kickoffs] de
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_kickoff_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_kickoff_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_kickoff_stats ON daily_build_non_pro_kickoff_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(8)
+
+
+	Punting game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_punting_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_punting_stats
+
+	INSERT INTO daily_build_non_pro_punting_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[Number]
+		,[Yards]
+		,[GrossPuntingAverage]
+		,[NetPuntingAverage]
+		,[Touchbacks]
+		,[Inside20]
+		,[Long]
+		,de.[Clubkey]
+		,[BlockedPunts]
+		,[ReturnYards]
+	FROM NonProDB.dbo.[Punting] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND  cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_punting_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_punting_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_punting_stats ON daily_build_non_pro_punting_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+
+	Placekicking game table.
+
+	
+	OUTPUT TABLES:
+		daily_build_non_pro_placekicking_stats
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE daily_build_non_pro_placekicking_stats
+
+	INSERT INTO daily_build_non_pro_placekicking_stats
+	SELECT de.PlayerID
+		,de.GameKey
+		,[FGMissed]
+		,[FGMade]
+		,[FGBlocked]
+		,[FGLong]
+		,[XPMissed]
+		,[XPMade]
+		,[XPBlocked]
+		,de.[Clubkey]
+		,[TotalPoints]
+	FROM NonProDB.dbo.[PlaceKicking] de
+	INNER JOIN NonProDB.dbo.Game ga
+		ON de.GameKey = ga.GameKey
+	INNER JOIN [NonProDB].[dbo].[CollegePlayerExtract] ex
+		ON de.PlayerID = ex.CollegeGSISID
+	LEFT JOIN #temp_cff_games cf
+		ON de.GameKey = cf.gsis_game_id
+	LEFT JOIN #temp_all_star_clubs ac
+		ON de.ClubKey = ac.ClubKey
+	WHERE ga.Season >= @iSeason
+		AND cf.gsis_game_id IS NULL
+		AND de.PlayerID NOT LIKE '%[^0-9]%'
+		AND de.PlayerID NOT LIKE ''
+		AND de.PlayerID IS NOT NULL
+		AND de.PlayerID <> '0'
+		AND ac.ClubKey IS NULL
+
+
+--Update the wrong gsis ids
+	UPDATE daily_build_non_pro_placekicking_stats
+	SET PlayerID = fi.ncaa_gsis_id_good
+	FROM #temp_fix_gsis_ids fi
+	WHERE daily_build_non_pro_placekicking_stats.PlayerID = fi.ncaa_gsis_id
+
+
+	ALTER INDEX ix_daily_build_non_pro_placekicking_stats ON daily_build_non_pro_placekicking_stats REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	DROP TABLE #temp_cff_games
+	DROP TABLE #temp_all_star_clubs
+
+	
+	RETURN @oReturnCD
+
+END
+
+
+
+
+
+GO
+
+
