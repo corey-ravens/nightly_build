@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_catch_probability]    Script Date: 5/16/2022 3:30:23 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_play_catch_probabilities]    Script Date: 5/16/2022 3:28:18 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -13,11 +13,13 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_r_advanced_stats_catch_probability] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+ALTER procedure [dbo].[sp_r_pro_play_catch_probabilities] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_r_advanced_stats_catch_probability
+Procedure Name:	sp_r_pro_play_catch_probabilites
 Author:			Corey Krawiec
 Creation Date:	07/21/2017
 Description:       
@@ -52,7 +54,7 @@ Create the R select statement so you can pull only the seasons you want to run.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 DECLARE @vSQL NVARCHAR(250)
-SET @vSQL = 'SELECT * FROM dbo.r_input_catch_probability WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+SET @vSQL = 'SELECT * FROM dbo.pro_play_catch_probabilities_inputs WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -61,7 +63,7 @@ Remove all the probabilities from the current season so you don't get dupes on t
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-DELETE FROM r_output_catch_probability
+DELETE FROM pro_play_catch_probabilities
 WHERE season >= @iSeason
 
 
@@ -71,7 +73,7 @@ Submit the R job to R services.
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-INSERT INTO dbo.r_output_catch_probability
+INSERT INTO dbo.pro_play_catch_probabilities
 
 EXECUTE sp_execute_external_script 
 @language = N'R',
