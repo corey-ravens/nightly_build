@@ -1,0 +1,191 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_expected_rush_yards]    Script Date: 5/16/2022 3:43:39 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+ALTER procedure [dbo].[sp_r_advanced_stats_expected_rush_yards] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_r_advanced_stats_expected_rush_yards
+Author:			Jeremy Parks
+Creation Date:	6/28/2017
+Description:       
+
+	This program is to calculate the expected rush yards for each run play.
+
+	1) Import the Rush Yards View from Analytics database
+	2) Load the Expected Rush Yards Model that was build in another program
+	3) Predict values
+	4) Create a new table in the database with the expected values
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date		SE	Description
+---------	--	------------------------------------------------------------------
+6/28/2017	JP	When converting data from SQL server - Any character variable \
+				translates to a factor.  Had to cast distance as a numeric, b/c
+				the model was treating it as such for predictions.
+
+**********************************************************************************/
+
+BEGIN 
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the R select statement so you can pull only the seasons you want to run.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @vSQL NVARCHAR(2500)
+SET @vSQL = 'SELECT [pff_play_id]
+      ,[season]
+      ,[season_type]
+      ,[week_adjusted]
+      ,[down]
+      ,[distance_bucket]
+      ,CAST([distance] AS int) as distance
+      ,[yards_from_opponent_end_zone_start]
+      ,[score_differential_defense]
+      ,[score_differential_defense_bucket]
+      ,[game_clock_counting_up_bucket_pff]
+      ,[game_clock_counting_up_pff_minutes]
+      ,[is_draw]
+      ,[is_shotgun]
+      ,[is_pistol]
+      ,[is_no_huddle]
+      ,[run_point_of_attack_intended]
+      ,[run_point_of_attack_actual]
+      ,[run_concept_primary]
+      ,[run_concept_secondary]
+      ,[run_concept_tertiary]
+      ,[play_side]
+      ,[offensive_formation_group]
+      ,[offensive_personnel_basic]
+      ,[defensive_lineman_count]
+      ,[front_7_on_los_count]
+      ,[linebacker_count]
+      ,[box_player_count]
+      ,[defensive_back_count]
+      ,[defensive_back_count_bucket]
+      ,[safety_count]
+      ,[deep_defensive_back_count]
+      ,[net_yards_play]
+      ,[yards_until_potential_tackle_bucket_play]
+      ,[yards_until_potential_tackle_play]
+      ,[yards_after_contact_play]
+  FROM [dbo].[r_input_expected_rush_yards]
+  WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Remove all the tackle probabilities from the current season so you don't get dupes on the re-write.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DELETE FROM r_output_expected_rush_yards
+WHERE season >= @iSeason
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Submit the R job to R services.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+insert into r_output_expected_rush_yards
+
+EXECUTE sp_execute_external_script 
+@language = N'R',
+@script = N'
+#######################################################################################################################
+#######################################################################################################################
+
+# This program is to calculate the expected rush yards for each run play.
+
+# 1) Import the Rush Yards View from Analytics database
+# 2) Load the Expected Rush Yards Model that was build in another program
+# 3) Predict values
+# 4) Create a new table in the database with the expected values
+
+#######################################################################################################################
+#######################################################################################################################
+
+
+#######################################################################################################################
+#  Library Loading
+#######################################################################################################################
+
+# Load the necessary libraries
+library(dplyr)
+
+
+#######################################################################################################################
+# Variable Creation
+#######################################################################################################################
+
+
+#######################################################################################################################
+# Load the previously saved best model
+#######################################################################################################################
+
+load(file="R:\\model\\expected_rush_yards_model")
+
+
+#######################################################################################################################
+# Predict the new data
+#######################################################################################################################
+
+#str(data_to_model)
+
+predictions <- predict(model, data_to_model, na.action=na.pass)
+data_to_model$rushing_yards_play_expected <- predictions
+
+
+
+#######################################################################################################################
+# Write the new data back into an SQL table
+#######################################################################################################################
+
+#Only take 4 columns for the SQL table
+for_sql <- data_to_model %>% select(pff_play_id, rushing_yards_play_expected, season, week_adjusted)
+',
+@input_data_1 = @vSQL,
+@input_data_1_name = N'data_to_model',
+@output_data_1_name = N'for_sql '
+/*
+
+-- For Testing -- Do not need to define the result set when importing into the table.
+WITH RESULT SETS 
+			((pff_play_id INT,
+            rushing_yards_play_expected FLOAT,
+			season INT, 
+            week_adjusted INT
+			))
+
+*/
+
+
+--r_output_expected_rush_yards
+
+
+END
+
+GO
+
+
