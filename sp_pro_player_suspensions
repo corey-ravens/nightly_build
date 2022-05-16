@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_stage_players_suspensions]    Script Date: 5/16/2022 3:18:21 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_pro_player_suspensions]    Script Date: 5/16/2022 3:13:06 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -14,17 +14,13 @@ GO
 
 
 
-
-
-
-
-ALTER procedure [dbo].[sp_stage_players_suspensions] (@oReturnCD INT OUTPUT) as
+ALTER procedure [dbo].[sp_pro_player_suspensions] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_stage_players_suspensions
+Procedure Name:	sp_pro_player_suspensions
 Author:			Corey Krawiec
-Creation Date:	7/18/2016
+Creation Date:	07/18/2016
 Description:       
 
 
@@ -55,31 +51,31 @@ BEGIN
 	all non NFL transactions.
 
 	TEMP TABLES:
-		##temp_suspensions_nfl
+		#temp_suspensions_nfl
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_suspensions_nfl, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_suspensions_nfl') IS NOT NULL
-		DROP TABLE ##temp_suspensions_nfl
+	-- Check if #temp_suspensions_nfl, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_suspensions_nfl') IS NOT NULL
+		DROP TABLE #temp_suspensions_nfl
 
 	SELECT *
-	      ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(LEAD(TransactionDesc) OVER (PARTITION BY PlayerID ORDER BY Season, OrderBy))),' ',''))  IN
-		        ('EXEMPT/SUSPENDED'
-		  	       ,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
-				   ,'RESERVE/INDEFINITESUSPENSION'
-			       ,'RESERVE/SUSPENDEDBYCOMMISSIONER'
-				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
-			       ,'RESERVE/SUSPENDEDBYCLUB'
-				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
-				   ,'SUSPENDED'
-				   ,'SUSPENDEDBYCOMMISSIONER'
-				   ,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
-				   --,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
-				 ) 	  
-		   THEN 1 ELSE 0 END
-		  AS next_row_is_suspension
-	INTO ##temp_suspensions_nfl
+		,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(LEAD(TransactionDesc) OVER (PARTITION BY PlayerID ORDER BY Season, OrderBy))),' ',''))  IN
+			('EXEMPT/SUSPENDED'
+				,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
+				,'RESERVE/INDEFINITESUSPENSION'
+				,'RESERVE/SUSPENDEDBYCOMMISSIONER'
+				,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
+				,'RESERVE/SUSPENDEDBYCLUB'
+				,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				,'SUSPENDED'
+				,'SUSPENDEDBYCOMMISSIONER'
+				,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				--,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
+				) 	  
+		THEN 1 ELSE 0 END
+		AS next_row_is_suspension
+	INTO #temp_suspensions_nfl
 	FROM [ProDB].[dbo].[TransactionTable]
 	WHERE LeagueType = 'NFL'
 		AND (ToDate >= Transactiondate OR ToDate IS NULL)
@@ -111,19 +107,19 @@ BEGIN
 	suspension severity, it should be a good proxy.
 
 	OUTPUT TABLES:
-		##temp_suspensions_games
+		#temp_suspensions_games
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_suspensions_games exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_suspensions_games') IS NOT NULL
-		DROP TABLE ##temp_suspensions_games
+	-- Check if #temp_suspensions_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_suspensions_games') IS NOT NULL
+		DROP TABLE #temp_suspensions_games
 
-		SELECT nfl_player_id
-			  ,SUM(CASE WHEN status_roster_simple = 'SUSPENDED' THEN 1 ELSE 0 END) AS suspensions_games
-		  INTO ##temp_suspensions_games
-		  FROM [Analytics].[dbo].[analysis_players_gameweek_status]
-	  GROUP BY nfl_player_id
+	SELECT nfl_player_id
+		,SUM(CASE WHEN status_roster_simple = 'SUSPENDED' THEN 1 ELSE 0 END) AS suspensions_games
+	INTO #temp_suspensions_games
+	FROM [bane_pro_player_gameweek_statuses]
+	GROUP BY nfl_player_id
 	  
 
 
@@ -134,13 +130,13 @@ BEGIN
 	suspension and not a pending suspension as well.
 
 	OUTPUT TABLES:
-		##temp_players_suspensions
+		#temp_players_suspensions
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_players_suspensions exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_players_suspensions') IS NOT NULL
-		DROP TABLE ##temp_players_suspensions
+	-- Check if #temp_players_suspensions exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_players_suspensions') IS NOT NULL
+		DROP TABLE #temp_players_suspensions
 
 	SELECT PlayerID AS nfl_player_id
 	      ,SUM(CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN 
@@ -187,8 +183,8 @@ BEGIN
 				    )
 				   THEN 1 ELSE 0 END)
 		   AS suspensions_total	 
-	INTO ##temp_players_suspensions
-	FROM ##temp_suspensions_nfl su
+	INTO #temp_players_suspensions
+	FROM #temp_suspensions_nfl su
 	GROUP BY PlayerID
 	
 
@@ -198,13 +194,13 @@ BEGIN
 	Join the summed suspensions and the summed games missed because of suspension tables
 
 	STAGING TABLES:
-		stage_players_suspensions
+		pro_player_suspensions
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE stage_players_suspensions
+	TRUNCATE TABLE pro_player_suspensions
 
-	INSERT INTO stage_players_suspensions 
+	INSERT INTO pro_player_suspensions 
 		([nfl_player_id],
 		[suspensions_enforced],
 		[suspensions_pending],
@@ -212,11 +208,11 @@ BEGIN
 		[suspensions_games])
 	SELECT su.*
 		  ,suspensions_games
-	FROM ##temp_players_suspensions su
-	LEFT JOIN ##temp_suspensions_games ga
+	FROM #temp_players_suspensions su
+	LEFT JOIN #temp_suspensions_games ga
 		ON su.nfl_player_id = ga.nfl_player_id
 
-	ALTER INDEX ix_stage_players_suspensions_nfl_player_id ON stage_players_suspensions REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON pro_player_suspensions REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
 	   
 	IF @@ERROR <> 0 BEGIN 
 		SET @oReturnCD = 1
