@@ -1,0 +1,163 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_catch_probability]    Script Date: 5/16/2022 3:30:23 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_r_advanced_stats_catch_probability] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_r_advanced_stats_catch_probability
+Author:			Corey Krawiec
+Creation Date:	07/21/2017
+Description:       
+
+
+	This program is to calculate the catch probability for every player on a given play.
+
+	1) Import the Catch Probability View from Analytics database
+	2) Load the Catch Probability Model that was build in another program
+	3) Predict values
+	4) Create a new table in the database with the catch probability values
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+BEGIN 
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the R select statement so you can pull only the seasons you want to run.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @vSQL NVARCHAR(250)
+SET @vSQL = 'SELECT * FROM dbo.r_input_catch_probability WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Remove all the probabilities from the current season so you don't get dupes on the re-write.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DELETE FROM r_output_catch_probability
+WHERE season >= @iSeason
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Submit the R job to R services.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+INSERT INTO dbo.r_output_catch_probability
+
+EXECUTE sp_execute_external_script 
+@language = N'R',
+@script = N'
+#######################################################################################################################
+#######################################################################################################################
+
+# This program is to calculate the catch probability for every player on a given play.
+
+# 1) Import the Catch Probability View from Analytics database
+# 2) Load the Catch Probability Model that was built in another program
+# 3) Predict values
+# 4) Create a new table in the database with the catch probability values
+
+#######################################################################################################################
+#######################################################################################################################
+
+
+#######################################################################################################################
+#  Library Loading
+#######################################################################################################################
+
+# Load the necessary libraries
+library(dplyr)
+
+#######################################################################################################################
+# Variable Creation
+#######################################################################################################################
+
+
+#######################################################################################################################
+# Filer Data
+#######################################################################################################################
+
+data_to_model <- data_to_model %>% 
+                    select(pff_play_id
+                           , season
+                           , week_adjusted
+                           , air_yards
+                           , pass_zone
+                           , distance
+                           , down
+                           , yards_from_opponent_end_zone_start
+                           , qb_pressure_play
+                           )
+
+data_to_model <- na.omit(data_to_model)
+
+#######################################################################################################################
+# Load the previously saved best model
+#######################################################################################################################
+
+load(file="R:\\model\\catch_probability_model")
+
+
+#######################################################################################################################
+# Predict the new data
+#######################################################################################################################
+
+predictions <- predict(model, data_to_model, type="prob")
+data_to_model$catch_probability <- predictions$YES
+
+
+#######################################################################################################################
+# Write the new data back into an SQL table
+#######################################################################################################################
+
+for_sql <- data_to_model %>% select(pff_play_id, catch_probability, season, week_adjusted)
+',
+@input_data_1 = @vSQL,
+@input_data_1_name = N'data_to_model',
+@output_data_1_name = N'for_sql '
+/*WITH RESULT SETS 
+			((pff_pp_id INT,
+            catch_probability FLOAT,
+			season INT, 
+            week_adjusted INT
+			))
+*/
+
+
+
+END
+
+
+
+GO
+
+
