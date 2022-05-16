@@ -1,0 +1,582 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_stage_players_game_injuries]    Script Date: 5/16/2022 1:58:13 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_stage_players_game_injuries] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_stage_players_game_injuries
+Author:			Corey Krawiec
+Creation Date:	7/18/2016
+Description:       
+
+
+	This program is for creating the Player Injury Report tables.  The end goal is a 
+	table that has one row per player per game that contains his injury information for
+	that entire week.  His practice 1, 2, and 3 along with his game status.
+
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date		SE				Description
+10/01/2018	Corey Krawiec	Updated where clause in step 2 to exclude rows where players get two GAME status rows. Starting in 2018,
+							some players had rows with ReportDay 3 and 4, both with ReportType of Game.  So now we throw out the row
+							that has ReportDay of 3 in those cases.
+
+**********************************************************************************/
+
+BEGIN 
+  
+
+
+	SET @oReturnCD  = 0
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	First clean up some fields and combine injury1 and injuryDesc1 into one column (do same with injury2)
+
+	TEMP TABLES:
+		##temp_player_injuries_clean
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_clean exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_clean') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_clean
+
+	SELECT PlayerID AS nfl_player_id
+          ,Gamekey AS nfl_game_key
+		  ,CASE WHEN Season >= 1997 AND Season <= 2000 THEN 'GAME'
+		        WHEN Season >= 2001 AND Season <= 2003 THEN 
+				    CASE WHEN ReportDay = 2 THEN 'GAME'
+					     WHEN ReportDay = 1 THEN 'PRACTICE 3'
+					END
+		        WHEN Season >= 2004 AND Season <= 2006 THEN 
+				    CASE WHEN ReportDay = 3 THEN 'GAME'
+					     WHEN ReportDay = 2 THEN 'PRACTICE 3'
+						 WHEN ReportDay = 1 THEN 'PRACTICE 2'
+
+					END
+		        WHEN Season = 2007 THEN 
+				    CASE WHEN ReportDay = 3 THEN 'GAME'
+					     WHEN ReportDay = 2 THEN 'PRACTICE 3'
+					END					
+				WHEN Season = 2008 THEN 'GAME'	
+		        WHEN Season >= 2009 THEN 
+				    CASE WHEN ReportDay IN (3,4) AND UPPER(LTRIM(RTRIM(ReportType))) = 'GAME' THEN 'GAME'
+						 WHEN ReportDay = 3 AND UPPER(LTRIM(RTRIM(ReportType))) = 'PRACTICE' THEN 'PRACTICE 3'
+					     WHEN ReportDay = 2 THEN 'PRACTICE 2'
+						 WHEN ReportDay = 1 THEN 'PRACTICE 1'
+					END	
+		   END AS report_type									
+          ,CASE WHEN LTRIM(RTRIM(InjuryStatus)) = 'Out (Definitely Will Not Play)' THEN 'Out'
+		        WHEN LTRIM(RTRIM(InjuryStatus)) = 'Did Not Participate In Practice' THEN 'None'
+				WHEN LTRIM(RTRIM(InjuryStatus)) = 'Limited Participation in Practice' THEN 'Part'
+				WHEN LTRIM(RTRIM(InjuryStatus)) = 'Full Participation in Practice' THEN 'Full'
+				ELSE LTRIM(RTRIM(InjuryStatus))
+		   END AS injury_status
+		  ,CASE WHEN CHARINDEX(Injury1,InjuryDesc1,1) > 0 THEN LTRIM(RTRIM(InjuryDesc1)) 
+		        WHEN UPPER(Injury1) = 'OTHER' AND InjuryDesc1 <> '' THEN LTRIM(RTRIM(InjuryDesc1))
+				ELSE REPLACE(CONCAT(LTRIM(RTRIM(Injury1)),'(',LTRIM(RTRIM(InjuryDesc1)),')'),'()','')
+		   END AS injury_1
+		  ,CASE WHEN CHARINDEX(Injury2,InjuryDesc2,1) > 0 THEN LTRIM(RTRIM(InjuryDesc2)) 
+		        WHEN UPPER(Injury2) = 'OTHER' AND InjuryDesc2 <> '' THEN LTRIM(RTRIM(InjuryDesc2))
+				ELSE REPLACE(CONCAT(LTRIM(RTRIM(Injury2)),'(',LTRIM(RTRIM(InjuryDesc2)),')'),'()','')
+		   END AS injury_2
+		   ,LEAD(ReportDay) OVER (PARTITION BY PlayerID, GameKey ORDER BY ReportDay, ReportType DESC) AS next_report_day
+	INTO ##temp_player_injuries_clean
+	FROM [ClubDB].[dbo].[PlayerInjury]
+
+   --select * from [ClubDB].[dbo].[PlayerInjury] where season=2016
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Combine the injury1 and injury2 columns into one column.
+
+	TEMP TABLES:
+		##temp_player_injuries_text_combine
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_text_combine exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_text_combine') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_text_combine
+
+	SELECT nfl_player_id
+          ,nfl_game_key
+		  ,report_type
+          ,injury_status
+		  ,CASE WHEN (injury_1 IS NULL OR injury_1 = '') AND injury_2 <> '' then injury_2
+			    WHEN (injury_2 IS NULL OR injury_2 = '') AND injury_1 <> '' then injury_1
+				WHEN CHARINDEX(UPPER(injury_1),UPPER(injury_2),1) > 0 AND CHARINDEX(UPPER(injury_2),UPPER(injury_1),1) = 0 THEN LTRIM(RTRIM(injury_2))
+				WHEN CHARINDEX(UPPER(injury_2),UPPER(injury_1),1) > 0 AND CHARINDEX(UPPER(injury_1),UPPER(injury_2),1) = 0 THEN LTRIM(RTRIM(injury_1))
+				WHEN injury_1 <> '' AND injury_2 <> '' THEN CONCAT(injury_1,' / ',injury_2) 
+				ELSE NULL
+				END AS injury_text
+	INTO ##temp_player_injuries_text_combine
+	FROM ##temp_player_injuries_clean
+	WHERE next_report_day IS NULL 
+		OR next_report_day <> 4
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Create the injury dummy variables
+
+	TEMP TABLES:
+		##temp_player_injuries_dummies
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_dummies exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_dummies') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_dummies
+
+	SELECT nfl_player_id
+          ,nfl_game_key
+		  ,report_type
+          ,injury_status
+		  ,injury_text
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FLU%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HEPATITIS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%/ILL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%INFECTION%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LARYNGITIS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NAUSEA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PNEUMONIA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SICK%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%VIRUS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%STREP%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%VIRAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HEATCRAMPS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CRAMPS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%DEHYDRATION%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ABRASIONS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BLISTER%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SKIN%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CONTUSIONS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ILL/%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_illness
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ACHILLIES%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ACHILLES%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ANKLE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ARCH%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CALF%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FEET%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FIBULA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LOWERLEG%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%GOUT%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TOE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HEEL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SHIN%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TIBIA%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_foot_ankle_lower_leg
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%KNEE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%MCL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PCL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ACL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%MENISCUS%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PATELLA%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_knee
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BUTT%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%GLUTE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HAMSTRING%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HANSTRING%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%QUAD%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%THIGH%'
+				  OR (UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LEG%' AND UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) NOT LIKE '%LOWERLEG%')
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_upper_leg
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ADDUCTOR%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ABDUCTOR%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%GROIN%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HERNIA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HIP%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PELVIS%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_hip_groin
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BACK%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LATERAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TAILBONE%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_back
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ABDOMEN%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ABDOMINAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ABSTRAIN%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%APPENDECTOMY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%APPPENDECTOMY%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%APPENDICITIS%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%APPENDIX%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ARRYTHMIA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ASTHMA%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BLOODCLOT%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CARDIAC%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CHEST%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%GASTR%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%GLAND%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HEART%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%INTERNAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%INTESTIN%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%KIDNEY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LIVER%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LUNG%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%OBLIQUE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PECSTRAIN%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PECTORAL%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PLEURISY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PNEUMOTHORAX%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%QBLIQUE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%RESPIRATORY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%RIB%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SIDE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SPLEEN%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SPLENECTOMY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%STERNAL%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%STERNUM%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SPLENECTOMY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TORSO%'
+				  OR (UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%STOMACH%' AND UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) NOT LIKE '%STOMACHFLU%' AND UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) NOT LIKE '%STOMACHVIRUS%')
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_chest_trunk_internal
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ARM%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BICEP%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%ELBOW%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FINGER%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FOREARM%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HAND%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%THUMB%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TRICEP%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%WRIST%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_arm_hand
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%A/CJOINT%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%BURNER%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CERVICAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CLAVICLE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%COLLAR%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NECK%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PINCHEDNERVE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SCAPULA%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SHOULDER%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%SPINE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%STINGER%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%THORACIC%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TRAP%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TRAPEZIUS%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_neck_shoulders
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CHEEK%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CHIN%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%EAR%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%EYE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FACE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FACIAL%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%FOREHEAD%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%HEAD%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%MIGRAINE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%MIGRANE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NOSE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%JAW%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%LIP%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%MOUTH%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TEETH%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TONGUE%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TONSIL%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TOOTH%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%VERTIGO%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%VIRTIGO%'
+				  OR (UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%THROAT%' AND UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) NOT LIKE '%STREPTHROAT%')
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_head_non_concussion
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%CONCUSSION%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_concussion
+		  ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%COACH%'
+			      OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%I.R.%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%/IR%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%-IR%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%INJUREDRESERVE%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NONFOOTBALL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NONINJURY%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NOTFOOTBALL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%NOTINJURY%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%OTHER%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PERSONAL%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%PLAYERDECISION%'
+				  OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%REST%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TEAMDECISION%'
+		          OR UPPER(REPLACE(LTRIM(RTRIM(injury_text)),' ','')) LIKE '%TEAMSUSPENSION%'
+				THEN 1 
+				ELSE 0
+		   END AS injury_type_other
+		  ,RANK() OVER (PARTITION BY nfl_player_id, nfl_game_key, report_type ORDER BY injury_text) AS injury_order
+	INTO ##temp_player_injuries_dummies
+	FROM ##temp_player_injuries_text_combine
+	ORDER BY nfl_player_id
+		,nfl_game_key
+		,report_type
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	To get everything in one row, you need injury status, injury text, and the dummies
+	all pivoted by player game.  Break it out into 3 separate steps so it is easier to
+	code and interpret later on.
+
+	First pivot injury status.
+
+	TEMP TABLES:
+		##temp_player_injuries_status_pivot
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_status_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_status_pivot') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_status_pivot
+
+	SELECT nfl_player_id
+          ,nfl_game_key
+		  ,CASE WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL AND [PRACTICE 2] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],' / ',[PRACTICE 2],' / ',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL AND [PRACTICE 2] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 2],' / ',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 2] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],' / ',[PRACTICE 2],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 2] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 2],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],']')
+			    WHEN [GAME] IS NOT NULL THEN [GAME]	
+		   END AS injury_status_week
+	      ,[GAME] AS injury_status_game
+	      ,[PRACTICE 3] AS injury_status_practice_3
+	      ,[PRACTICE 2] AS injury_status_practice_2
+		  ,[PRACTICE 1] AS injury_status_practice_1
+	INTO ##temp_player_injuries_status_pivot
+	FROM (
+		SELECT nfl_player_id
+          ,nfl_game_key
+		  ,report_type
+          ,injury_status
+		  ,injury_order
+		FROM ##temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
+	PIVOT (MAX(injury_status) FOR report_type IN ([GAME], [PRACTICE 3], [PRACTICE 2], [PRACTICE 1])) AS pvt
+	WHERE injury_order = 1
+	ORDER BY nfl_player_id
+		,nfl_game_key
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Second pivot injury text
+
+	TEMP TABLES:
+		temp_player_injuries_text_pivot
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_text_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_text_pivot') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_text_pivot
+
+	SELECT nfl_player_id
+           ,nfl_game_key
+		  ,CASE WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL AND [PRACTICE 2] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],' / ',[PRACTICE 2],' / ',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL AND [PRACTICE 2] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 2],' / ',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 3] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 3],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 2] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],' / ',[PRACTICE 2],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 2] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 2],']')
+				WHEN [GAME] IS NOT NULL AND [PRACTICE 1] IS NOT NULL THEN CONCAT([GAME],' [',[PRACTICE 1],']')
+			    WHEN [GAME] IS NOT NULL THEN [GAME]	
+		   END AS injury_text_week
+	      ,[GAME] AS injury_text_game
+	      ,[PRACTICE 3] AS injury_text_practice_3
+	      ,[PRACTICE 2] AS injury_text_practice_2
+		  ,[PRACTICE 1] AS injury_text_practice_1
+	INTO ##temp_player_injuries_text_pivot
+	FROM (
+		SELECT nfl_player_id
+          ,nfl_game_key
+		  ,report_type
+          ,injury_text
+		  ,injury_order
+		FROM ##temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
+	PIVOT (MAX(injury_text) FOR report_type IN ([GAME], [PRACTICE 3], [PRACTICE 2], [PRACTICE 1])) AS pvt
+	WHERE injury_order = 1
+	ORDER BY nfl_player_id
+		,nfl_game_key
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	For the dummies, you don't need to pivot, just take the MAX for each player game -
+	that way if he has a 1 in any field, it will get counted for the week, if he has
+	all 0s, it will show up as zero for the week.  Still name the table pivot for 
+	consistency with the above two steps which are accomplishing the same thing
+	with other variables.
+
+	TEMP TABLES:
+		##temp_player_injuries_dummy_pivot
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_injuries_dummy_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_injuries_dummy_pivot') IS NOT NULL
+		DROP TABLE ##temp_player_injuries_dummy_pivot
+
+	SELECT nfl_player_id
+          ,nfl_game_key
+		  ,MAX(injury_type_illness) AS injury_type_illness
+		  ,MAX(injury_type_foot_ankle_lower_leg) AS injury_type_foot_ankle_lower_leg
+		  ,MAX(injury_type_knee) AS injury_type_knee
+		  ,MAX(injury_type_upper_leg) AS injury_type_upper_leg
+		  ,MAX(injury_type_hip_groin) AS injury_type_hip_groin
+		  ,MAX(injury_type_back) AS injury_type_back
+		  ,MAX(injury_type_chest_trunk_internal) AS injury_type_chest_trunk_internal
+		  ,MAX(injury_type_arm_hand) AS injury_type_arm_hand
+		  ,MAX(injury_type_neck_shoulders) AS injury_type_neck_shoulders
+		  ,MAX(injury_type_head_non_concussion) AS injury_type_head_non_concussion
+		  ,MAX(injury_type_concussion) AS injury_type_concussion
+	INTO ##temp_player_injuries_dummy_pivot
+	FROM ##temp_player_injuries_dummies 
+	WHERE injury_order = 1
+	GROUP BY nfl_player_id
+		,nfl_game_key
+	ORDER BY nfl_player_id
+		,nfl_game_key
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Now join the 3 previously created pivoted tables together so you have
+	one row for every player for every game that lists his injury data
+	for the whole week in the same row.
+
+	STAGING TABLES:
+		stage_players_game_injuries
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE stage_players_game_injuries
+
+    INSERT INTO stage_players_game_injuries
+		([nfl_player_id],
+		[nfl_game_key],
+		[injury_status_week],
+		[injury_text_week],
+		[injury_status_game],
+		[injury_text_game],
+		[injury_status_practice_3],
+		[injury_text_practice_3],
+		[injury_status_practice_2],
+		[injury_text_practice_2],
+		[injury_status_practice_1],
+		[injury_text_practice_1],
+		[practices_missed],
+		[injury_type_illness],
+		[injury_type_foot_ankle_lower_leg],
+		[injury_type_knee],
+		[injury_type_upper_leg],
+		[injury_type_hip_groin],
+		[injury_type_back],
+		[injury_type_chest_trunk_internal],
+		[injury_type_arm_hand],
+		[injury_type_neck_shoulders],
+		[injury_type_head_non_concussion],
+		[injury_type_concussion]) 
+	SELECT st.nfl_player_id
+		  ,st.nfl_game_key
+		  ,injury_status_week
+		  ,injury_text_week
+	      ,injury_status_game
+		  ,injury_text_game
+	      ,injury_status_practice_3
+		  ,injury_text_practice_3
+	      ,injury_status_practice_2
+		  ,injury_text_practice_2
+		  ,injury_status_practice_1	      
+		  ,injury_text_practice_1
+		  ,(CASE WHEN UPPER(injury_status_practice_3) IN ('NONE','OUT') THEN 1 WHEN UPPER(injury_status_practice_3) = 'PART' THEN 0.5 ELSE 0 END
+		   +CASE WHEN UPPER(injury_status_practice_2) IN ('NONE','OUT') THEN 1 WHEN UPPER(injury_status_practice_2) = 'PART' THEN 0.5 ELSE 0 END
+		   +CASE WHEN UPPER(injury_status_practice_1) IN ('NONE','OUT') THEN 1 WHEN UPPER(injury_status_practice_1) = 'PART' THEN 0.5 ELSE 0 END) 
+		   AS practices_missed
+		  ,injury_type_illness
+		  ,injury_type_foot_ankle_lower_leg
+		  ,injury_type_knee
+		  ,injury_type_upper_leg
+		  ,injury_type_hip_groin
+		  ,injury_type_back
+		  ,injury_type_chest_trunk_internal
+		  ,injury_type_arm_hand
+		  ,injury_type_neck_shoulders
+		  ,injury_type_head_non_concussion
+		  ,injury_type_concussion
+	FROM ##temp_player_injuries_status_pivot st
+	LEFT JOIN ##temp_player_injuries_text_pivot te
+		ON st.nfl_player_id = te.nfl_player_id
+		AND st.nfl_game_key = te.nfl_game_key
+	LEFT JOIN ##temp_player_injuries_dummy_pivot du
+		ON st.nfl_player_id = du.nfl_player_id
+		AND st.nfl_game_key = du.nfl_game_key
+  
+	ALTER INDEX ix_stage_players_game_injury_nfl_player_id ON stage_players_game_injuries REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	   
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 1
+		GOTO PROC_END
+	END 
+
+	PROC_END:
+
+	RETURN @oReturnCD  
+
+END
+
+
+
+
+
+
+
+
+
+
+
+
+GO
+
+
