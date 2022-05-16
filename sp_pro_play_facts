@@ -1,0 +1,1602 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_stage_plays_play_data]    Script Date: 5/16/2022 1:50:45 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_stage_plays_play_data] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_stage_plays_play_data
+Author:			Corey Krawiec
+Creation Date:	06/03/2016
+Description:       
+
+	*) Play Delete List
+	1) Ancillary Info
+	2) Offensive Alignment
+	3) Defensive Alignment
+	4) Context
+	5) Results
+	6) Tackle
+	7) Pass Rush
+	8) Pass
+	9) Run
+	10) Penalty
+	11) Type
+
+Updates:
+	1)  08/08/2017 - Added where clauses so only the most recent season is refreshed daily.  
+		If you want to refresh previous seasons, change the @iSeason variable in the main stored procedure that calls this one.
+			
+Input Parameters:
+	@iSeason
+	
+Output Parameters:
+	@oReturnCD 
+
+Modifications:
+Date        SE  Description
+----------	--	--------------------------------------------------------------------
+08/08/2017	CK	Added where clauses so only the most recent season is refreshed daily.  
+				If you want to refresh previous seasons, change the @iSeason variable in 
+				the main stored procedure that calls this one.
+11/28/2018	JP	Switched the Ancillary Info to be the first part of the procedure since
+				it was being used for the list of games to delete.
+
+**********************************************************************************/
+
+
+BEGIN 
+
+	SET @oReturnCD  = 0
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Create a table with all the pff_PLAYIDs from the current season.
+
+	Since most of the tables don't have a season variable on them, you can use
+	these play ids to determine which rows to delete in the 'DELETE FROM ... WHERE'
+	statements.
+
+	TEMP TABLES:
+		#temp_delete_play_list
+			    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_delete_play_list exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_delete_play_list') IS NOT NULL
+		DROP TABLE #temp_delete_play_list
+
+	SELECT pff_play_id
+	INTO #temp_delete_play_list
+	FROM stage_plays_play_ancillary
+	WHERE season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	
+	(1)
+
+	Ancillary play info (season, play weight, random number, etc.)
+
+	TEMP TABLES:
+		#temp_random_play
+		#temp_time_remaining_pff -> #temp_first_down_achieved
+		#temp_time_remaining_nfl
+		#temp_first_down_achieved
+
+	STAGING TABLES:
+		stage_plays_play_ancillary
+
+	--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Generate random numbers at the PLAY and PLAYERPLAY level
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_random_play, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_random_play') IS NOT NULL
+		DROP TABLE #temp_random_play
+
+	SELECT DISTINCT play_id AS pff_play_id
+		,ABS(CHECKSUM(NEWID())) % 12 as random_number_play
+	INTO #temp_random_play
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Create a time counting up variable based on PFF Clock Time time and one 
+	off of NFL Clock Time. Have both so you can validate PFF using NFL. 
+
+	Time is being counted in seconds, so divide by 60 to get minutes.
+
+	Be careful with the Play Clock variable, we know there were issues 
+	with how the NFL tracked it for a while. Eugene worked with them on it
+	and might have some insight.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_time_remaining_pff exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_time_remaining_pff') IS NOT NULL
+		DROP TABLE #temp_time_remaining_pff
+
+	SELECT play_id AS pff_play_id
+		,[quarter] AS pff_quarter
+		,CASE 
+			WHEN [quarter] = 2 THEN 900
+			WHEN [quarter] = 3 THEN 1800
+			WHEN [quarter] = 4 THEN 2700
+			WHEN [quarter] = 5 THEN 3600
+			ELSE 0 END 
+		+ (900 - (SUBSTRING([clock],1,CHARINDEX(':',[clock])-1)*60 + SUBSTRING([clock],CHARINDEX(':',[clock])+1,LEN([clock])))) AS game_clock_counting_up_pff
+		,900-(SUBSTRING([clock],1,CHARINDEX(':',[clock])-1)*60 + SUBSTRING([clock],CHARINDEX(':',[clock])+1,LEN([clock]))) AS quarter_clock_counting_up_pff
+	  INTO #temp_time_remaining_pff
+	  FROM [PFFUltimate].[dbo].[plays]	
+	  WHERE season >= @iSeason 
+
+
+	-- Check if #temp_time_remaining_nfl exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_time_remaining_nfl') IS NOT NULL
+		DROP TABLE #temp_time_remaining_nfl
+
+	SELECT pl.GameKey
+		,[Quarter]
+		,PlayID
+		,CASE WHEN CHARINDEX(':',ClockTime) = 0 THEN NULL
+			ELSE CASE WHEN [Quarter] = 2 THEN 900
+				WHEN [Quarter] = 3 THEN 1800
+				WHEN [Quarter] = 4 THEN 2700
+				WHEN [Quarter] = 5 THEN 3600
+			ELSE 0
+			END + (900 - (SUBSTRING(ClockTime,1,CHARINDEX(':',ClockTime)-1)*60 + SUBSTRING(ClockTime,CHARINDEX(':',ClockTime)+1,LEN(ClockTime)))) 
+		END AS game_clock_counting_up_nfl
+		,CASE WHEN CHARINDEX(':',ClockTime) = 0 THEN NULL
+		        ELSE 900-(SUBSTRING(ClockTime,1,CHARINDEX(':',ClockTime)-1)*60 + SUBSTRING(ClockTime,CHARINDEX(':',ClockTime)+1,LEN(ClockTime))) 
+		END AS quarter_clock_counting_up_nfl
+		,PlayClock
+	INTO #temp_time_remaining_nfl
+	FROM [ProDB].[dbo].[PlayList] pl
+	INNER JOIN [ProDB].[dbo].[Game] ga
+		ON pl.GameKey = ga.GameKey
+		AND ga.LeagueType = 'NFL'
+	WHERE Season >= @iSeason  
+  
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Ancillary Play Information Table
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_ancillary table
+	DELETE FROM stage_plays_play_ancillary
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_ancillary
+		([pff_play_id]
+		,[gsis_play_id]
+		,[is_no_play]
+		,[is_no_play_pff]
+		,[is_two_point_conversion]
+		,[play_weight]
+		,[random_number_play]
+		,[season_type]
+		,[season]
+		,[season_type_adjusted]
+		,[week]
+		,[week_adjusted]
+		,[gsis_game_key])
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(pfp.gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN (no_play = 0 OR (no_play = 1 AND down = 0 AND LTRIM(RTRIM(UPPER(run_pass))) IN ('R','P') AND penalty IS NULL)) THEN 0 ELSE 1 END AS is_no_play
+		,no_play AS is_no_play_pff --excludes two point conversions
+		,CASE WHEN down = 0 AND LTRIM(RTRIM(UPPER(run_pass))) IN ('R','P') AND penalty IS NULL THEN 1 ELSE 0 END AS is_two_point_conversion
+		,CASE WHEN LTRIM(RTRIM(UPPER(pfp.[week]))) IN ('P1','P2') THEN CASE WHEN game_clock_counting_up_pff <= 300 THEN 1
+															    WHEN game_clock_counting_up_pff > 300 AND game_clock_counting_up_pff <= 600 THEN 0.85
+																WHEN game_clock_counting_up_pff > 600 AND game_clock_counting_up_pff <= 1800 THEN 0.70
+																WHEN game_clock_counting_up_pff > 1800 AND game_clock_counting_up_pff <= 2400 THEN 0.55
+																WHEN game_clock_counting_up_pff > 2400 THEN 0.40
+																END
+				WHEN LTRIM(RTRIM(UPPER(pfp.[week]))) IN ('P3') THEN CASE WHEN game_clock_counting_up_pff <= 900 THEN 1
+															    WHEN game_clock_counting_up_pff > 900 AND game_clock_counting_up_pff <= 1800 THEN 0.85
+																WHEN game_clock_counting_up_pff > 1800 AND game_clock_counting_up_pff <= 2700 THEN 0.70
+																WHEN game_clock_counting_up_pff > 2700 THEN 0.40
+																END
+				WHEN LTRIM(RTRIM(UPPER(pfp.[week]))) IN ('P4') THEN CASE WHEN game_clock_counting_up_pff <= 2100 THEN 1
+															    WHEN game_clock_counting_up_pff > 2100 AND game_clock_counting_up_pff <= 2400 THEN 0.85
+																WHEN game_clock_counting_up_pff > 2400 AND game_clock_counting_up_pff <= 3300 THEN 0.70
+																WHEN game_clock_counting_up_pff > 3300 THEN 0.55
+																END
+				WHEN LTRIM(RTRIM(UPPER(pfp.[week]))) IN ('P5') THEN CASE WHEN game_clock_counting_up_pff <= 300 THEN 0.85
+															    WHEN game_clock_counting_up_pff > 300 AND game_clock_counting_up_pff <= 1500 THEN 0.70
+																WHEN game_clock_counting_up_pff > 1500 AND game_clock_counting_up_pff <= 1800 THEN 0.55
+																WHEN game_clock_counting_up_pff > 1800 THEN 0.40
+																END				
+				ELSE 1
+		END AS play_weight
+		,random_number_play
+		,season_type
+		,g.season
+		,CASE WHEN season_type IN ('REG','POST') THEN 'REGPOST' ELSE 'PRE' END AS season_type_adjusted
+		,g.[week]
+		,CASE WHEN season_type = 'PRE' THEN 100 + g.[week]
+			  WHEN season_type = 'REG' THEN 200 + g.[week]
+			  WHEN season_type = 'POST' THEN 300 + g.[week]
+		 END AS week_adjusted
+		,gsis_game_id AS gsis_game_key
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	LEFT JOIN #temp_time_remaining_pff pff_time --The table with the PFF Clock information
+		ON pfp.play_id = pff_time.pff_play_id
+	LEFT JOIN #temp_time_remaining_nfl nfl_time --The table with the NFL Clock information
+		ON pfp.gsis_game_id = nfl_time.GameKey
+		AND pfp.gsis_play_id = nfl_time.PlayID	   
+	LEFT JOIN #temp_random_play random_play --The table with the random number on each play
+		ON pfp.play_id = random_play.pff_play_id		   
+	INNER JOIN stage_games_pff g --The games table
+	    ON pfp.game_id = g.pff_game_id	
+	WHERE pfp.season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 3
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_ancillary REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_random_play
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2)
+
+
+	Create the offensive alignment information table.  Count the number of FB, TE, etc.
+
+	Then count the number of offensive players that are double teamed on a play.
+
+	Add these to the other offensive alignment information.
+
+	TEMP TABLES:
+		#temp_off_double_teams
+		#temp_off_player_counts
+
+	STAGING TABLES:
+		stage_plays_play_offensive_alignment
+				    
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+	-- Check if #temp_off_double_teams exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_off_double_teams') IS NOT NULL
+		DROP TABLE #temp_off_double_teams
+
+	SELECT pfo.play_id AS pff_play_id
+		,SUM(CASE WHEN pfo.comment LIKE '%DT%' THEN 1 ELSE 0 END) AS double_teamer_off_play_total
+	INTO #temp_off_double_teams
+	FROM [PFFUltimate].[dbo].[offense] pfo
+	INNER JOIN  [PFFUltimate].[dbo].[plays] pfp
+		ON pfo.play_id = pfp.play_id
+	WHERE season >= @iSeason
+	GROUP BY pfo.play_id
+
+
+	-- Check if #temp_off_player_counts exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_off_player_counts') IS NOT NULL
+		DROP TABLE #temp_off_player_counts
+
+	SELECT pfo.play_id AS pff_play_id
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('TE-F','TE-FL','TE-IL','TE-L','TE-OL','TE-SIL','TE-SL','TE-SOL','TE-WL','TE-FR','TE-IR','TE-R','TE-OR','TE-SIR','TE-SR','TE-SOR','TE-WR') THEN 1 ELSE 0 END) AS te_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('TE-FR','TE-IR','TE-R','TE-OR','TE-SIR','TE-SR','TE-SOR','TE-WR') THEN 1 ELSE 0 END) AS te_count_right
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('TE-FL','TE-IL','TE-L','TE-OL','TE-SIL','TE-SL','TE-SOL','TE-WL') THEN 1 ELSE 0 END) AS te_count_left
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('FB','FB-IL','FB-L','FB-OL','FB-IR','FB-R','FB-OR') THEN 1 ELSE 0 END) AS fb_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('FB-IR','FB-R','FB-OR') THEN 1 ELSE 0 END) AS fb_count_right
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('FB-IL','FB-L','FB-OL') THEN 1 ELSE 0 END) AS fb_count_left
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('HB','HB-IL','HB-L','HB-OL','HB-SIL','HB-SL','HB-SOL','HB-WL','HB-IR','HB-R','HB-OR','HB-SIR','HB-SR','HB-SOR','HB-WR') THEN 1 ELSE 0 END) AS rb_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('HB-IR','HB-R','HB-OR','HB-SIR','HB-SR','HB-SOR','HB-WR') THEN 1 ELSE 0 END) AS rb_count_right
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('HB-IL','HB-L','HB-OL','HB-SIL','HB-SL','HB-SOL','HB-WL') THEN 1 ELSE 0 END) AS rb_count_left
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('LWR','SLIWR','SLOWR','SLWR','RWR','SRIWR','SROWR','SRWR') THEN 1 ELSE 0 END) AS wr_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('RWR','SRIWR','SROWR','SRWR') THEN 1 ELSE 0 END) AS wr_count_right
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfo.position))) IN ('LWR','SLIWR','SLOWR','SLWR') THEN 1 ELSE 0 END) AS wr_count_left
+	INTO #temp_off_player_counts
+	FROM [PFFUltimate].[dbo].[offense] pfo
+	INNER JOIN  [PFFUltimate].[dbo].[plays] pfp
+		ON pfo.play_id = pfp.play_id
+	WHERE season >= @iSeason	 
+	GROUP BY pfo.play_id
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Play Offensive Alignment Table
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_offensive_alignment table 
+	DELETE FROM stage_plays_play_offensive_alignment
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_offensive_alignment
+		([pff_play_id]
+		,[gsis_play_id]
+		,[offensive_formation_group]
+		,[offensive_personnel]
+		,[offensive_personnel_basic]
+		,[offensive_formation]
+		,[rb_alignment]
+		,[te_alignment]
+		,[te_count]
+		,[te_count_right]
+		,[te_count_left]
+		,[fb_count]
+		,[fb_count_right]
+		,[fb_count_left]
+		,[strong_side]
+		,[double_teamer_off_play_total])		
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(pfp.gsis_play_id,0) AS gsis_play_id
+		,LTRIM(RTRIM(UPPER(offensive_formation_group))) AS offensive_formation_group
+		,LTRIM(RTRIM(UPPER(offensive_personnel))) AS offensive_personnel
+		,LTRIM(RTRIM(UPPER(offensive_personnel_basic))) AS offensive_personnel_basic
+		,LTRIM(RTRIM(UPPER(offensive_formation))) AS offensive_formation
+		,LTRIM(RTRIM(UPPER(running_back_alignment))) AS rb_alignment
+		,LTRIM(RTRIM(UPPER(tight_end_alignment))) AS te_alignment
+		,te_count
+		,te_count_right
+		,te_count_left
+		,fb_count
+		,fb_count_right
+		,fb_count_left
+		,CASE WHEN te_count_right > te_count_left THEN 'RIGHT'
+			WHEN te_count_left > te_count_right THEN 'LEFT'
+			WHEN fb_count_right > fb_count_left THEN 'RIGHT'
+			WHEN fb_count_left > fb_count_right THEN 'LEFT'
+			ELSE NULL 
+		END AS strong_side
+		,double_teamer_off_play_total
+	FROM [PFFUltimate].[dbo].[plays] pfp 
+	LEFT JOIN #temp_off_double_teams dbl_team_off --The table with the number of players double teaming on offense on a given play
+		ON pfp.play_id = dbl_team_off.pff_play_id
+	LEFT JOIN #temp_off_player_counts off_cnt --The table with the number of players at different positions on a given play
+		ON pfp.play_id = off_cnt.pff_play_id
+	WHERE season >= @iSeason                         
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 1
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_offensive_alignment REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_off_double_teams
+	DROP TABLE #temp_off_player_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(3) 
+
+
+	Create the defensive alignment information table.  First
+	count the number of safeties on a given play.  In the SAS version of
+	the code, you changed all DBs who were covering a TE to SS, likely
+	to help with the Free/Strong/Nickel Safety classifications.  For now
+	we will leave the positions as is but this is the place to change that 
+	if you want to in the future.
+
+	While you're at it, also get an overall DB count, LB count, and DL count
+	and role counts.
+
+	Then create a variable listing the defensive lineman from left to right based
+	on the defensive_line_techniques mapping table.
+
+	Then create a table listing the alignment code of the left most and rightmost linebacker on the play.
+
+	Then count the number of defensive players that are double teamed on a play.
+
+	Add these to the other defensive alignment information.
+
+	TEMP TABLES:
+		#temp_position_count
+		#temp_def_technique_minimums
+		#temp_furthest_right_left_linebackers
+		#temp_def_double_teams
+
+	STAGING TABLES:
+		stage_plays_play_defensive_alignment
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_count exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_count') IS NOT NULL
+		DROP TABLE #temp_position_count
+
+	SELECT pfd.play_id AS pff_play_id
+		--For now we are keeping 'LB-FS' in the safety and defensive back count, because even though he is a LB, he is technically playing safety
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) LIKE '%FS%' OR LTRIM(RTRIM(UPPER(position))) LIKE '%SS%' THEN 1 ELSE 0 END) AS safety_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) LIKE '%FS%' OR LTRIM(RTRIM(UPPER(position))) LIKE '%SS%' OR LTRIM(RTRIM(UPPER(position))) LIKE '%CB%' THEN 1 ELSE 0 END) AS defensive_back_count
+		,SUM(CASE WHEN (LTRIM(RTRIM(UPPER(pfd.position))) LIKE '%FS%' OR LTRIM(RTRIM(UPPER(position))) LIKE '%SS%' OR LTRIM(RTRIM(UPPER(position))) LIKE '%CB%') AND player_depth >= 12 THEN 1 ELSE 0 END) AS deep_defensive_back_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) LIKE '%CB%' THEN 1 ELSE 0 END) AS corner_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) LIKE '%LB%' AND LTRIM(RTRIM(UPPER(position))) NOT IN ('ROLB','LOLB') THEN 1 ELSE 0 END) AS linebacker_count
+		--,SUM(CASE WHEN pfd.position IN ('LEO','LE','DLE','RE','DRE','REO','LOLB','ROLB') THEN 1 ELSE 0 END) AS edge_rusher_count
+		--,SUM(CASE WHEN pfd.position IN ('NLT','NRT','NT','DLIT','DLOT','DLT','DRIT','DROT','DRT') THEN 1 ELSE 0 END) AS interior_dl_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) IN ('NLT','NRT','NT','DLIT','DLOT','DLT','DRIT','DROT','DRT','LEO','LE','DLE','RE','DRE','REO') THEN 1 ELSE 0 END) AS defensive_lineman_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) IN ('NLT','NRT','NT','DLIT','DLOT','DLT','DRIT','DROT','DRT','LEO','LE','DLE','RE','DRE','REO','LOLB','ROLB') THEN 1 ELSE 0 END) AS front_7_on_los_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.position))) IN ('NLT','NRT','NT') THEN 1 ELSE 0 END) AS nose_tackle_play
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.[role]))) = 'COVERAGE' THEN 1 ELSE 0 END) AS coverage_role_count
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(pfd.box_player))) = 'TRUE' THEN 1 ELSE 0 END) AS box_player_count
+	INTO #temp_position_count
+	FROM [PFFUltimate].[dbo].[defense] pfd
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON pfd.play_id = pfp.play_id
+	WHERE season >= @iSeason
+    GROUP BY pfd.play_id
+
+
+	-- Check if #temp_def_technique_minimums exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_def_technique_minimums') IS NOT NULL
+		DROP TABLE #temp_def_technique_minimums
+
+	SELECT def.play_id AS pff_play_id
+		,MIN(CASE WHEN technique_code_with_side LIKE '%R%' THEN technique_code_numeric ELSE NULL END) AS technique_code_min_right_dl
+		,MIN(ABS(CASE WHEN technique_code_with_side LIKE '%L%' THEN technique_code_numeric ELSE NULL END)) AS technique_code_min_left_dl
+	INTO #temp_def_technique_minimums
+	FROM [PFFUltimate].[dbo].[defense] def
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON def.play_id = pfp.play_id
+	INNER JOIN [map_pff_defensive_line_techniques] dlt
+		ON def.defensive_technique = dlt.pff_defensive_technique
+		AND def.defensive_technique IS NOT NULL
+	WHERE season >= @iSeason
+	GROUP BY def.play_id
+
+
+	-- Check if #temp_furthest_right_left_linebackers exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_furthest_right_left_linebackers') IS NOT NULL
+		DROP TABLE #temp_furthest_right_left_linebackers
+	
+	SELECT def.play_id AS pff_play_id
+		,MAX(CASE 
+			WHEN def.defensive_technique IS NULL THEN
+				CASE WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-WR') THEN 27
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SOR') THEN 26
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SR') THEN 25
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SIR') THEN 24
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('ROLB') THEN 15
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('RLB') THEN 14
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('RILB') THEN 5
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('MLB') THEN 0
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-WL') THEN -27
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SOL') THEN -26
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SL') THEN -25
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SIL') THEN -24
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LOLB') THEN -15
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LLB') THEN -14
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LILB') THEN -5
+					ELSE NULL
+				END
+			ELSE 				
+				CASE WHEN def.defensive_technique = 22 THEN 0
+					WHEN def.defensive_technique < 22 OR def.defensive_technique > 22 THEN def.defensive_technique - 22
+					ELSE NULL
+				END
+		END) AS align_code_right_most_lb
+		,MIN(CASE 
+			WHEN def.defensive_technique IS NULL THEN
+				CASE WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-WR') THEN 27
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SOR') THEN 26
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SR') THEN 25
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SIR') THEN 24
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('ROLB') THEN 15
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('RLB') THEN 14
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('RILB') THEN 5
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('MLB') THEN 0
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-WL') THEN -27
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SOL') THEN -26
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SL') THEN -25
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LB-SIL') THEN -24
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LOLB') THEN -15
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LLB') THEN -14
+					WHEN LTRIM(RTRIM(UPPER(def.position))) IN ('LILB') THEN -5
+					ELSE NULL
+				END
+			ELSE 				
+				CASE WHEN def.defensive_technique = 22 THEN 0
+					WHEN def.defensive_technique < 22 OR def.defensive_technique > 22 THEN def.defensive_technique - 22
+					ELSE NULL
+				END
+		END) AS align_code_left_most_lb
+	INTO #temp_furthest_right_left_linebackers
+	FROM [PFFUltimate].[dbo].[defense] def
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON def.play_id = pfp.play_id
+	WHERE season >= @iSeason
+	GROUP BY def.play_id
+
+
+	-- Check if #temp_def_double_teams exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_def_double_teams') IS NOT NULL
+		DROP TABLE #temp_def_double_teams
+
+	SELECT def.play_id AS pff_play_id
+		,SUM(CASE WHEN def.comment LIKE '%DT%' THEN 1 ELSE 0 END) AS double_teamed_def_play_total
+	INTO #temp_def_double_teams
+	FROM [PFFUltimate].[dbo].[defense] def
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON def.play_id = pfp.play_id
+	WHERE season >= @iSeason 
+	GROUP BY def.play_id
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Play Defensive Alignment Table
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_defensive_alignment table 
+	DELETE FROM stage_plays_play_defensive_alignment
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_defensive_alignment 
+		([pff_play_id]
+		,[gsis_play_id]
+		,[base_or_sub]
+		,[safety_count]
+		,[defensive_back_count]
+		,[deep_defensive_back_count]
+		,[corner_count]
+		,[linebacker_count]
+		,[defensive_lineman_count]
+		,[front_7_on_los_count]
+		,[nose_tackle_play]
+		,[coverage_role_count]
+		,[box_player_count]
+		,[defensive_back_count_bucket]
+		,[align_in_press_play]
+		,[double_teamed_def_play_total]
+		,[middle_of_field_shown]
+		,[middle_of_field_played]
+		,[technique_code_min_right_dl]
+		,[technique_code_min_left_dl]
+		,[align_code_right_most_lb]
+		,[align_code_left_most_lb])
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(pfp.gsis_play_id,0) AS gsis_play_id
+		--Position Counts
+		,CASE WHEN defensive_back_count <= 4 THEN 'BASE' ELSE 'SUB' END AS base_or_sub
+		,safety_count
+		,defensive_back_count
+		,deep_defensive_back_count
+		,corner_count
+		,linebacker_count
+		,defensive_lineman_count
+		,front_7_on_los_count
+		,nose_tackle_play
+		,coverage_role_count
+		,box_player_count
+		--Bucket the number of DBs for model analysis
+		,CASE WHEN defensive_back_count <= 3 THEN 'THREE OR LESS DBs'
+			WHEN defensive_back_count = 4 THEN 'FOUR DBs'
+			WHEN defensive_back_count IN (5,6) THEN 'FIVE OR SIX DBs'
+			WHEN defensive_back_count >= 7 THEN 'SEVEN OR MORE DBs'
+			ELSE NULL 
+		END AS defensive_back_count_bucket  
+		,CASE WHEN press_players IS NOT NULL THEN 1 
+			ELSE 0 
+		END AS align_in_press_play
+		,double_teamed_def_play_total
+		,CASE WHEN season <= 2013 OR (season = 2013 AND [week] IN ('P1','P2','P3','P4','P5')) THEN NULL --First case based on season is because PFF hasn't backfilled this variable yet, if they ever do you can remove that part of the case statement
+			WHEN mofoc_shown = 'C' THEN 'CLOSED' 
+			WHEN mofoc_shown = 'O' THEN 'OPEN'
+			ELSE NULL
+		END AS middle_of_field_shown 
+		,CASE WHEN season <= 2013 OR (season = 2013 AND [week] IN ('P1','P2','P3','P4','P5')) THEN NULL
+			WHEN mofoc_played = 'C' THEN 'CLOSED' 
+			WHEN mofoc_played = 'O' THEN 'OPEN'
+			ELSE NULL
+		END AS middle_of_field_played
+		--Defensive Techniques
+		,technique_code_min_right_dl
+		,technique_code_min_left_dl
+		--Linebacker Align Codes
+		,align_code_right_most_lb
+		,align_code_left_most_lb
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	INNER JOIN #temp_position_count pc --The Position Count table
+		ON pfp.play_id = pc.pff_play_id
+	LEFT JOIN #temp_def_technique_minimums dt --The Defensive Line Techniques table
+		ON pfp.play_id = dt.pff_play_id	
+	LEFT JOIN #temp_furthest_right_left_linebackers rll --The left and right most linebackers table
+		ON pfp.play_id = rll.pff_play_id
+	LEFT JOIN #temp_def_double_teams dbl_team_def --The table with the number of players double teamed on defense on a given play
+		ON pfp.play_id = dbl_team_def.pff_play_id
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 2
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_defensive_alignment REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_position_count
+	DROP TABLE #temp_def_technique_minimums
+	DROP TABLE #temp_furthest_right_left_linebackers
+	DROP TABLE #temp_def_double_teams
+
+		
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4)
+
+
+	Down, Distance, Clock, Field Position, Team Information Table
+
+	OUTPUT TABLES:
+	stage_plays_play_context
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear the stage_plays_play_context table
+	DELETE FROM stage_plays_play_context
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_context
+		([pff_play_id]
+		,[gsis_play_id]
+		,[team_offense]
+		,[team_defense]
+		,[down]
+		,[distance]
+		,[distance_bucket]
+		,[quarter]
+		,[game_clock_counting_up_nfl]
+		,[game_clock_counting_up_nfl_minutes]
+		,[game_clock_counting_up_pff]
+		,[game_clock_counting_up_pff_minutes]
+		,[game_clock_counting_up_bucket_nfl]
+		,[game_clock_counting_up_bucket_pff]
+		,[yards_from_opponent_end_zone_start]
+		,[hash_mark_offense]
+		,[hash_mark_defense]
+		,[score_differential_defense]
+		,[score_differential_defense_bucket])
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(pfp.gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN pfp.offense = 'SL' THEN 'LA' 
+			WHEN pfp.offense = 'OAK' THEN 'LV'
+			WHEN pfp.offense = 'SD' THEN 'LAC'
+			ELSE pfp.offense
+		END AS team_offense
+		,CASE WHEN pfp.defense = 'SL' THEN 'LA' 
+			WHEN pfp.defense = 'OAK' THEN 'LV'
+			WHEN pfp.defense = 'SD' THEN 'LAC'
+			ELSE pfp.defense
+		END AS team_defense
+		,down
+		,distance
+		--Bucket the distance to go - these can be changed based on coach/personnel desires
+		,CASE WHEN down = 0 THEN 
+				CASE WHEN CAST(field_position AS SMALLINT) < 0 THEN 
+						 CASE WHEN 100 + CAST(field_position AS SMALLINT) = 1 THEN 'ONE'
+						      WHEN 100 + CAST(field_position AS SMALLINT) >= 2 AND 100 + CAST(field_position AS SMALLINT) <= 4 THEN 'SHORT'
+							  WHEN 100 + CAST(field_position AS SMALLINT) >= 5 AND 100 + CAST(field_position AS SMALLINT) <= 7 THEN 'MEDIUM'
+							  WHEN 100 + CAST(field_position AS SMALLINT) >= 8 THEN 'LONG'
+							  ELSE NULL
+						  END --Ends section where CAST(field_position AS SMALLINT) < 0
+					 WHEN CAST(field_position AS SMALLINT) > 0 THEN 
+						 CASE WHEN CAST(field_position AS SMALLINT) = 1 THEN 'ONE'
+							  WHEN CAST(field_position AS SMALLINT) >= 2 AND CAST(field_position AS SMALLINT) <= 4 THEN 'SHORT'
+							  WHEN CAST(field_position AS SMALLINT) >= 5 AND CAST(field_position AS SMALLINT) <= 7 THEN 'MEDIUM'
+							  WHEN CAST(field_position AS SMALLINT) >= 8 THEN 'LONG'
+							  ELSE NULL
+						 END --Ends section where CAST(field_position AS SMALLINT) > 0											
+					ELSE NULL
+					END --Ends section where Down=0
+		   ELSE	
+				CASE WHEN distance = 1 THEN 'ONE'
+					 WHEN distance >= 2 AND distance <= 4 THEN 'SHORT'
+					 WHEN distance >= 5 AND distance <= 7 THEN 'MEDIUM'
+					 WHEN distance >= 8 THEN 'LONG'
+					 ELSE NULL
+				END --Ends section where down is not 0
+		END AS distance_bucket
+		,pfp.[quarter]
+		,game_clock_counting_up_nfl
+		,ROUND(CAST(game_clock_counting_up_nfl AS NUMERIC(6,2))/60,1) AS game_clock_counting_up_nfl_minutes
+		,game_clock_counting_up_pff
+		,ROUND(CAST(game_clock_counting_up_pff AS NUMERIC(6,2))/60,1) AS game_clock_counting_up_pff_minutes
+		--Bucket the NFL Clock Time - these can be changed based on coach/personnel desires
+		,CASE WHEN nfl_time.[Quarter] = 1 THEN 'FIRST QUARTER'
+				WHEN nfl_time.[Quarter] = 3 THEN 'THIRD QUARTER'
+				WHEN nfl_time.[Quarter] = 2 THEN CASE WHEN game_clock_counting_up_nfl>=1680 THEN 'TW0 MINUTE' ELSE 'SECOND QUARTER' END
+				WHEN nfl_time.[Quarter] = 4 THEN CASE WHEN game_clock_counting_up_nfl>=3480 THEN 'TW0 MINUTE' ELSE 'FOURTH QUARTER' END									   
+				ELSE 'OVERTIME'
+		END AS game_clock_counting_up_bucket_nfl
+		--Bucket the PFF Clock Time - these can be changed based on coach/personnel desires
+		,CASE WHEN pff_time.pff_QUARTER = 1 THEN 'FIRST QUARTER'
+				WHEN pff_time.pff_QUARTER = 3 THEN 'THIRD QUARTER'
+				WHEN pff_time.pff_QUARTER = 2 THEN CASE WHEN game_clock_counting_up_pff>=1680 THEN 'TW0 MINUTE' ELSE 'SECOND QUARTER' END
+				WHEN pff_time.pff_QUARTER = 4 THEN CASE WHEN game_clock_counting_up_pff>=3480 THEN 'TW0 MINUTE' ELSE 'FOURTH QUARTER' END									   
+				ELSE 'OVERTIME'
+		END AS game_clock_counting_up_bucket_pff
+		,CASE WHEN LTRIM(RTRIM(UPPER(kick_type))) IN ('D','F','K','O','P','Q','S','B') THEN -1 * CAST(field_position AS SMALLINT)
+		        WHEN CAST(field_position AS SMALLINT) < 0 THEN 100 + CAST(field_position AS SMALLINT) 
+				WHEN CAST(field_position AS SMALLINT) > 0 THEN CAST(field_position AS SMALLINT) 
+				ELSE NULL
+		END AS yards_from_opponent_end_zone_start
+		,LTRIM(RTRIM(UPPER([hash]))) AS hash_mark_offense
+		,LTRIM(RTRIM(UPPER(hash_defense))) AS hash_mark_defense
+		,def_score - off_score AS score_differential_defense
+		--Bucket the score differential for model analysis
+		,CASE WHEN ABS(def_score - off_score) >=17 THEN 'THREE POSSESSION GAME'
+			    WHEN ABS(def_score - off_score) <= 16 AND ABS(def_score - off_score) >= 9 THEN 'TWO POSSESSION GAME'
+				WHEN ABS(def_score - off_score) <= 8 THEN 'ONE POSSESSION GAME'
+				ELSE NULL
+		END AS score_differential_defense_bucket
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	LEFT JOIN #temp_time_remaining_pff pff_time
+		ON pfp.play_id = pff_time.pff_play_id
+	LEFT JOIN #temp_time_remaining_nfl nfl_time
+		ON pfp.gsis_game_id = nfl_time.GameKey
+		AND pfp.gsis_play_id = nfl_time.PlayID
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 4
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ix_stage_plays_play_context_pff_play_id ON stage_plays_play_context REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(5)
+
+
+	Play Results
+
+	TEMP TABLES:
+		#temp_first_down_achieved
+		#temp_receiving_yards_play
+		#temp_rushing_yards_play
+		#temp_plays_expected_points_change
+
+	OUTPUT TABLES:
+		stage_plays_play_results
+
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out if the next play was a first down.
+
+	TEMP TABLES:
+		#temp_first_down_achieved
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_first_down_achieved, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_first_down_achieved') IS NOT NULL
+		DROP TABLE #temp_first_down_achieved
+
+	SELECT pff_play.play_id AS pff_play_id
+		,CASE WHEN LEAD(offense,1) OVER (PARTITION BY pff_play.game_id ORDER BY game_clock_counting_up_pff, pff_play.sort_order) = offense AND LEAD(down,1) OVER (PARTITION BY pff_play.game_id ORDER BY game_clock_counting_up_pff, pff_play.sort_order) = 1 THEN 1 ELSE 0 END AS first_down_achieved
+	INTO #temp_first_down_achieved
+	FROM [PFFUltimate].[dbo].[plays] pff_play	
+	LEFT JOIN #temp_time_remaining_pff pff_time
+		ON pff_play.play_id = pff_time.pff_play_id 
+	WHERE down IN (1,2,3,4)
+		AND no_play = 0 
+		AND season >= @iSeason
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out the receiving yards on a play
+
+	TEMP TABLES:
+		#temp_receiving_yards_play
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_receiving_yards_play, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_receiving_yards_play') IS NOT NULL
+		DROP TABLE #temp_receiving_yards_play
+
+	SELECT DISTINCT pfo.play_id AS pff_play_id
+		,receiving_yards AS receiving_yards_play
+	INTO #temp_receiving_yards_play
+	FROM [PFFUltimate].[dbo].[offense] pfo
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON pfo.play_id = pfp.play_id
+    WHERE pfo.receiving_yards IS NOT NULL
+		AND season >= @iSeason
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out the rushing yards on a play
+
+	TEMP TABLES:
+		#temp_rushing_yards_play
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_rushing_yards_play, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_rushing_yards_play') IS NOT NULL
+		DROP TABLE #temp_rushing_yards_play
+
+	SELECT DISTINCT pfo.play_id AS pff_play_id
+		,rushing_yards AS rushing_yards_play
+	INTO #temp_rushing_yards_play
+	FROM [PFFUltimate].[dbo].[offense] pfo
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON pfo.play_id = pfp.play_id
+    WHERE pfo.rushing_yards IS NOT NULL
+		AND season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Get the expected points change from RD PlayFact in Analytics Work. Eventually you will calculate it in this program but for now (11/2019) pull it from there.
+
+
+	TEMP TABLES:
+		#temp_plays_expected_points_change
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_plays_expected_points_change, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_plays_expected_points_change') IS NOT NULL
+		DROP TABLE #temp_plays_expected_points_change
+
+	SELECT play_id AS pff_play_id
+		,expected_points
+		,expected_points_added AS expected_points_change_play
+	INTO #temp_plays_expected_points_change
+	FROM PFFUltimate.dbo.plays
+
+	
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Play Results Information
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear the stage_plays_play_results table
+	DELETE FROM stage_plays_play_results
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_results
+		([pff_play_id]
+		,[gsis_play_id]
+		,[play_description]
+		,[net_yards_play]
+		,[yards_after_contact_play]
+		,[success_defense_play]
+		,[touchdown_play]
+		,[yards_until_potential_tackle_bucket_play]
+		,[yards_until_potential_tackle_play]
+		,[receiving_yards_play]
+		,[rushing_yards_play]
+		,[first_down_achieved]
+		,[expected_points_change_play]
+		,[touchdown_play_defense])
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(pfp.gsis_play_id,0) AS gsis_play_id
+		,REPLACE(REPLACE([PlayDescription], CHAR(13), ' '), CHAR(10), ' ') AS play_description
+		,gain_loss_net AS net_yards_play
+		,yards_after_contact AS yards_after_contact_play
+		,CASE WHEN pfp.down IN (1,2) THEN CASE WHEN gain_loss_net <= CAST(distance AS DECIMAL(4,2)) * 0.45 AND first_down_achieved = 0 AND touchdown IS NULL THEN 1 ELSE 0 END
+		        WHEN pfp.down IN (3,4) THEN CASE WHEN first_down_achieved = 0 THEN 1 ELSE 0 END
+				ELSE NULL
+		END AS success_defense_play
+		,CASE WHEN touchdown IS NOT NULL AND touchdown LIKE '%'+offense+'%' THEN 1 ELSE 0 END AS touchdown_play
+		----Play Yardage / Success
+		-------Bucket the potential tackle yards - these can be changed based on coach/personnel desires
+		,CASE WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'R' THEN CASE WHEN gain_loss_net - COALESCE(yards_after_contact,0) <= 2 THEN 'SHORT'
+														WHEN gain_loss_net - COALESCE(yards_after_contact,0) >= 3 AND gain_loss_net-COALESCE(yards_after_contact,0) <= 7 THEN 'MEDIUM'
+														WHEN gain_loss_net - COALESCE(yards_after_contact,0) >= 8 AND gain_loss_net-COALESCE(yards_after_contact,0) <= 12 THEN 'LONG'
+														WHEN gain_loss_net - COALESCE(yards_after_contact,0) >= 12 THEN 'DEEP'
+														ELSE NULL
+													END			
+				WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'P' THEN CASE WHEN pass_depth <> '' AND CAST(pass_depth AS SMALLINT) <= 2 THEN 'SHORT'
+														WHEN pass_depth <> '' AND CAST(pass_depth AS SMALLINT) >= 3 AND CAST(pass_depth AS SMALLINT) <= 7 THEN 'MEDIUM'
+														WHEN pass_depth <> '' AND CAST(pass_depth AS SMALLINT) >= 8 AND CAST(pass_depth AS SMALLINT) <= 12 THEN 'LONG'
+														WHEN pass_depth <> '' AND CAST(pass_depth AS SMALLINT) >= 12 THEN 'DEEP'
+														ELSE NULL
+													END			  
+ 				ELSE NULL
+		END AS yards_until_potential_tackle_bucket_play
+		,CASE WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'R' THEN gain_loss_net - COALESCE(yards_after_contact,0)	
+				WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'P' THEN CAST(pass_depth AS SMALLINT) 		  
+ 				ELSE NULL
+		END AS yards_until_potential_tackle_play
+		,receiving_yards_play
+		,rushing_yards_play
+		,first_down_achieved
+		,expected_points_change_play
+		,CASE WHEN touchdown IS NOT NULL AND touchdown NOT LIKE '%'+offense+'%' THEN 1 ELSE 0 END AS touchdown_play_defense
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	LEFT JOIN #temp_first_down_achieved first_down --The table with the first down acheieved data
+		ON pfp.play_id = first_down.pff_play_id
+	LEFT JOIN [ProDB].[dbo].[PlayList] nfl_play --The table with play data from the NFL - this way you can decide to use NFL or PFF for penalties
+		ON pfp.gsis_game_id = nfl_play.GameKey
+		AND pfp.gsis_play_id = nfl_play.PlayID
+	LEFT JOIN #temp_receiving_yards_play re --The table with the rushing yards data
+		ON pfp.play_id = re.pff_play_id
+	LEFT JOIN #temp_rushing_yards_play ru --The table with the rushing yards data
+		ON pfp.play_id = ru.pff_play_id
+	LEFT JOIN #temp_plays_expected_points_change xp --The table with the expected points data
+		ON pfp.play_id = xp.pff_play_id
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 5
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_results REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_first_down_achieved
+	DROP TABLE #temp_receiving_yards_play
+	DROP TABLE #temp_rushing_yards_play
+	DROP TABLE #temp_plays_expected_points_change
+	DROP TABLE #temp_time_remaining_pff
+	DROP TABLE #temp_time_remaining_nfl
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6) 
+
+
+	Tackle Information (Play Level)
+
+	STAGING TABLES:
+		stage_plays_play_tackle
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear the stage_plays_play_tackle table
+	DELETE FROM stage_plays_play_tackle
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_tackle
+		([pff_play_id]
+		,[gsis_play_id]
+		,[tackle_play]
+		,[tackle_assist_play]
+		,[missed_tackle_play]
+		,[stop_pff_play]
+		,[fumble_play]
+		,[forced_fumble_play]
+		,[fumble_recovery_team])
+	SELECT play_id AS pff_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN tackle IS NOT NULL AND tackle <> '' THEN 1 ELSE 0 END AS tackle_play
+		,CASE WHEN assist IS NOT NULL AND assist <> '' THEN 1 ELSE 0 END AS tackle_assist_play
+		,CASE WHEN missed_tackle IS NOT NULL AND missed_tackle <> '' THEN 1 ELSE 0 END AS missed_tackle_play
+		,CASE WHEN [stop] IS NOT NULL AND [stop] <> '' THEN 1 ELSE 0 END AS stop_pff_play
+		,CASE WHEN fumble IS NOT NULL AND fumble <> '' THEN 1 ELSE 0 END AS fumble_play
+		,CASE WHEN forced_fumble IS NOT NULL AND forced_fumble <> '' THEN 1 ELSE 0 END AS forced_fumble_play
+		,CASE WHEN fumble_recovery IS NOT NULL AND fumble_recovery <> '' AND fumble IS NOT NULL THEN LTRIM(RTRIM(UPPER(fumble_recovery))) ELSE NULL END AS fumble_recovery_team
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 6
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_tackle REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(7)
+
+
+	Pass Rush Information (Play Level)
+
+	STAGING TABLES:
+		stage_plays_play_pass_rush
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_pass_rush table 
+	DELETE FROM stage_plays_play_pass_rush
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_pass_rush
+		([pff_play_id]
+		,[gsis_play_id]
+		,[time_to_pressure]
+		,[time_to_throw]
+		,[pass_rush_result]
+		,[qb_moved_off_spot]
+		,[qb_reset]
+		,[qb_pressure_play]
+		,[qb_sack_play]
+		,[qb_hit_play]
+		,[qb_hurry_play]
+		,[unblocked_pressure_play])
+	SELECT play_id AS pff_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
+		,time_to_pressure
+		,time_to_throw
+		,LTRIM(RTRIM(UPPER(pass_rush_result))) AS pass_rush_result
+		,CAST(quarterback_moved_off_spot AS TINYINT) AS qb_moved_off_spot
+		,CAST(quarterback_reset AS TINYINT) AS qb_reset
+		,CASE WHEN quarterback_pressure IS NOT NULL AND quarterback_pressure <> '' THEN 1 ELSE 0 END AS qb_pressure_play
+		,CASE WHEN sack IS NOT NULL AND sack <> '' THEN 1 ELSE 0 END AS qb_sack_play
+		,CASE WHEN hit_players IS NOT NULL AND hit_players <> '' THEN 1 ELSE 0 END AS qb_hit_play
+		,CASE WHEN hurry_players IS NOT NULL AND hurry_players <> '' THEN 1 ELSE 0 END AS qb_hurry_play
+		,CASE WHEN unblocked_pressure IS NOT NULL AND unblocked_pressure <> '' THEN 1 ELSE 0 END AS unblocked_pressure_play
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 7
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_pass_rush REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+	
+	(8)
+
+
+	Pass Information (Play Level)
+
+	For 2017 season, PFF added new values for pff_PASSROUTETARGETGROUP.  As of 08/11/2017, you just convert those new ones
+	to the closest old routes (the new ones are 9S and 38R) because there isn't enough data to build new expected YAC based on them.
+	At some point in the future you will want to update the model to include these routes.
+
+	TEMP TABLES :
+		#temp_off_pos_targeted
+
+	OUTPUT TABLES:
+		stage_plays_play_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out the targeted offensive position on the play
+
+	TEMP TABLES:
+		#temp_off_pos_targeted
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_off_pos_targeted, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_off_pos_targeted') IS NOT NULL
+		DROP TABLE #temp_off_pos_targeted
+
+	SELECT po.play_id AS pff_play_id
+		,po.position AS position_pff
+		,CAST(po.gsis_player_id AS INT) AS targeted_offensive_player_nfl_id
+		,LTRIM(RTRIM(UPPER(po.[pass_route]))) AS targeted_route_code
+		,CASE WHEN LTRIM(RTRIM(UPPER(po.pass_route_target_group))) = '9S' THEN '9R'
+			  WHEN LTRIM(RTRIM(UPPER(po.pass_route_target_group))) = '38R' THEN '39R'
+			  WHEN LTRIM(RTRIM(UPPER(po.pass_route_target_group))) IN ('NR','NV') THEN NULL
+			  ELSE LTRIM(RTRIM(UPPER(po.pass_route_target_group)))
+		 END AS targeted_route_code_group
+		--,LTRIM(RTRIM(UPPER(po.pass_route_target_group))) AS targeted_route_code_group
+		,LTRIM(RTRIM(UPPER([pff_route_group_name]))) AS targeted_route_simple
+		--,COALESCE(LTRIM(RTRIM(UPPER([pff_route_group_name]))),'MISSING') AS targeted_route_simple
+	INTO #temp_off_pos_targeted
+	FROM [PFFUltimate].[dbo].[offense] po
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON po.play_id = pfp.play_id
+	LEFT JOIN [map_pff_pass_routes] pr
+		ON LTRIM(RTRIM(UPPER(po.[pass_route]))) = LTRIM(RTRIM(UPPER(pr.[pff_passroute])))
+		AND LTRIM(RTRIM(UPPER(po.[pass_route_name]))) = LTRIM(RTRIM(UPPER(pr.[pff_passroutename])))
+	WHERE LTRIM(RTRIM(UPPER(po.[targeted_receiver]))) = 'TRUE'
+		AND season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out if there was a dropped interception on the play
+
+	TEMP TABLES:
+		#temp_dropped_interception_play
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_dropped_interception_play exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_dropped_interception_play') IS NOT NULL
+		DROP TABLE #temp_dropped_interception_play
+
+	SELECT DISTINCT pfd.play_id AS pff_play_id
+	INTO #temp_dropped_interception_play
+	FROM [PFFUltimate].[dbo].[defense] pfd
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON pfd.play_id = pfp.play_id
+    WHERE pfd.dropped_interception IS NOT NULL
+		AND season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Find out if there was a dropped touchdown on the play
+
+	TEMP TABLES:
+		#temp_dropped_touchdown_play
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_dropped_touchdown_play exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_dropped_touchdown_play') IS NOT NULL
+		DROP TABLE #temp_dropped_touchdown_play
+
+	SELECT DISTINCT pfp.play_id AS pff_play_id
+	INTO #temp_dropped_touchdown_play
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	INNER JOIN [PFFUltimate].[dbo].[offense] pfo
+		ON pfp.play_id = pfo.play_id
+	INNER JOIN stage_plays_play_context co
+		ON pfp.play_id = co.pff_play_id
+    WHERE LTRIM(RTRIM(UPPER(pfo.dropped_pass))) = 'TRUE'
+		AND pfp.pass_depth >= yards_from_opponent_end_zone_start
+		AND season >= @iSeason
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Play Pass Information
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_pass table 
+	DELETE FROM stage_plays_play_pass
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_pass
+		([pff_play_id]
+		,[gsis_play_id]
+		,[air_yards]
+		,[air_yards_round_5]
+		,[air_yards_bucket]
+		,[pass_direction]
+		,[pass_zone]
+		,[targeted_offensive_position]
+		,[pass_width]
+		,[pass_result]
+		,[incompletion_type]
+		,[pass_break_up_pff_play]
+		,[interception_play]
+		,[targeted_offensive_player_nfl_id]
+		,[targeted_route_code]
+		,[targeted_route_code_group]
+		,[targeted_route_simple]
+		,[yards_after_catch_play]
+		,[dropped_interception_play]
+		,[dropped_touchdown_play])
+	SELECT pfp.play_id AS pff_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) IN ('BATTED PASS','HIT AS THREW','RUN','SACK','SPIKE','THROWN AWAY') THEN NULL
+			ELSE pass_depth
+		END AS air_yards
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) IN ('BATTED PASS','HIT AS THREW','RUN','SACK','SPIKE','THROWN AWAY') THEN NULL
+			ELSE CONVERT(INTEGER,ROUND(pass_depth / 5.0 ,0)*5) 
+		END AS air_yards_round_5
+		-----------Bucket the air yards - these can be changed based on coach/personnel desires
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) IN ('BATTED PASS','HIT AS THREW','RUN','SACK','SPIKE','THROWN AWAY') THEN NULL
+			ELSE		
+				CASE WHEN pass_depth <= 2 THEN 'SHORT'
+						WHEN pass_depth >= 3 AND pass_depth <= 7 THEN 'MEDIUM'
+						WHEN pass_depth >= 8 AND pass_depth <= 12 THEN 'LONG'
+						WHEN pass_depth >= 12 THEN 'DEEP'
+						ELSE NULL
+				END
+		END AS air_yards_bucket
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_direction))) = 'L' THEN 'OUTSIDE LEFT NUMBERS' 
+		        WHEN LTRIM(RTRIM(UPPER(pass_direction))) = 'R' THEN 'OUTSIDE RIGHT NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_direction))) = 'M' THEN 'INSIDE NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_direction))) = 'X' THEN 'NO TARGETED RECEIVER'
+				ELSE NULL 
+		END AS pass_direction
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '1L' THEN 'LEFT SIDELINE (3 YDS IN)'
+			    WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '2L' THEN 'LEFT OUTSIDE NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '3L' THEN 'LEFT INSIDE NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '4' THEN 'MIDDLE (BETWEEN HASHES)'
+				WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '5R' THEN 'RIGHT INSIDE NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '6R' THEN 'RIGHT OUTSIDE NUMBERS'
+				WHEN LTRIM(RTRIM(UPPER(pass_zone))) = '7R' THEN 'RIGHT SIDELINE (3 YDS IN)'
+				ELSE NULL
+		END AS pass_zone
+		,LTRIM(RTRIM(UPPER(ot.position_pff))) AS targeted_offensive_position
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) IN ('BATTED PASS','HIT AS THREW','RUN','SACK','SPIKE','THROWN AWAY') THEN NULL
+			ELSE pass_width
+		END AS pass_width
+		--Pass width is in distance from left sideline
+		,LTRIM(RTRIM(UPPER(pass_result))) AS pass_result
+		,CASE WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'OT' THEN 'OVERTHROW'
+		        WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'UT' THEN 'UNDERTHROW'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'BR' THEN 'BEHIND RECEIVER'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'IF' THEN 'IN FRONT OF RECEIVER'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'BP' THEN 'BATTED PASS'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'CC' THEN 'CLOSE COVERAGE'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'CP' THEN 'CONTESTED POSSESSION'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'DP' THEN 'DROP'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'FD' THEN 'RECEIVER FELL DOWN'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'FO' THEN 'FORCEOUT'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'HA' THEN 'HIT AS THROWN'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'HD' THEN 'HIT BY DEFENDER'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'MR' THEN 'MISREAD COVERAGE'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'OB' THEN 'CATCH OUT OF BOUNDS'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'PD' THEN 'PASS DEFENSED'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'PE' THEN 'PENALTY'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'RC' THEN 'ROUTE CUT OFF'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'RE' THEN 'RECEIVER ERROR'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'SQ' THEN 'SQUEEZE BALL'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'SR' THEN 'STOPPED ROUTE'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'TA' THEN 'THROW AWAY'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'DI' THEN 'WR DEFLECTED'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'QS' THEN 'QB SLIP'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'HH' THEN 'HIT HELMET'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'MC' THEN 'MISCOMMUNICATION'
+				WHEN LTRIM(RTRIM(UPPER(incompletion_type))) = 'HO' THEN 'HIT OFFICIAL'
+				ELSE CASE WHEN LEN(incompletion_type) > 0 THEN 'OTHER' ELSE NULL END
+		END AS incompletion_type
+		,CASE WHEN pass_breakup IS NOT NULL AND pass_breakup <> '' THEN 1 ELSE 0 END AS pass_break_up_pff_play
+		,CASE WHEN interception IS NOT NULL AND interception <> '' THEN 1 ELSE 0 END AS interception_play
+		,targeted_offensive_player_nfl_id
+		,targeted_route_code
+		,targeted_route_code_group
+		,targeted_route_simple
+		,yards_after_catch AS yards_after_catch_play
+		,CASE WHEN di.pff_play_id IS NOT NULL THEN 1 ELSE 0 END AS dropped_interception_play
+		,CASE WHEN dt.pff_play_id IS NOT NULL THEN 1 ELSE 0 END AS dropped_touchdown_play
+	FROM [PFFUltimate].[dbo].[plays] pfp
+	LEFT JOIN #temp_off_pos_targeted ot --The table with the targeted offensive position
+		ON pfp.play_id = ot.pff_play_id
+	LEFT JOIN #temp_dropped_interception_play di --The table with the dropped interceptions
+		ON pfp.play_id = di.pff_play_id
+	LEFT JOIN #temp_dropped_touchdown_play dt --The table with the dropped touchdowns
+		ON pfp.play_id = dt.pff_play_id
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 8
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_pass REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_off_pos_targeted
+	DROP TABLE #temp_dropped_interception_play
+	DROP TABLE #temp_dropped_touchdown_play
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(9)
+
+
+	Run Information (Play Level)
+
+	STAGING TABLES:
+		stage_plays_play_run
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_run table 
+	DELETE FROM stage_plays_play_run
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_run
+		([pff_play_id]
+		,[gsis_play_id]
+		,[run_point_of_attack_intended]
+		,[run_point_of_attack_actual]
+		,[point_of_attack_change]
+		,[run_point_of_attack_change_reason]
+		,[run_concept_primary]
+		,[run_concept_secondary]
+		,[run_concept_tertiary]
+		,[rb_direction])
+	SELECT play_id AS pff_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN intended_poa IS NULL THEN NULL
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'LE' THEN 'LEFT END'
+			    WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'LT' THEN 'LEFT TACKLE'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'LG' THEN 'LEFT GUARD'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'ML' THEN 'MIDDLE LEFT'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'MR' THEN 'MIDDLE RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'RG' THEN 'RIGHT GUARD'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'RT' THEN 'RIGHT TACKLE'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'RE' THEN 'RIGHT END'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'LEFT LATERAL PASS' THEN 'LEFT LATERAL'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'RIGHT LATERAL PASS' THEN 'RIGHT LATERAL'
+				WHEN LTRIM(RTRIM(UPPER(intended_poa))) = 'NO VIDEO' THEN NULL
+				ELSE LTRIM(RTRIM(UPPER(intended_poa)))
+		END AS run_point_of_attack_intended
+		,CASE WHEN actual_poa IS NULL THEN NULL
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'LE' THEN 'LEFT END'
+			    WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'LT' THEN 'LEFT TACKLE'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'LG' THEN 'LEFT GUARD'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'ML' THEN 'MIDDLE LEFT'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'MR' THEN 'MIDDLE RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'RG' THEN 'RIGHT GUARD'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'RT' THEN 'RIGHT TACKLE'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'RE' THEN 'RIGHT END'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'LEFT LATERAL PASS' THEN 'LEFT LATERAL'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'RIGHT LATERAL PASS' THEN 'RIGHT LATERAL'
+				WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'NO VIDEO' THEN NULL
+				ELSE LTRIM(RTRIM(UPPER(actual_poa)))
+		END AS run_point_of_attack_actual	   
+		,CASE WHEN poa_change_reason IS NOT NULL THEN 1 ELSE 0 END AS point_of_attack_change
+		,CASE WHEN LTRIM(RTRIM(UPPER(poa_change_reason))) IN ('BOUNCE OUT','BETWEEN THE TACKLES','VOLUNTARY') THEN 'VOLUNTARY'
+		        WHEN LTRIM(RTRIM(UPPER(poa_change_reason))) IN ('DEFENSE BLOCKED','FORCED') THEN 'FORCED'
+				ELSE LTRIM(RTRIM(UPPER(poa_change_reason)))
+		END AS run_point_of_attack_change_reason
+		,LTRIM(RTRIM(UPPER(primary_run_concept))) AS run_concept_primary
+		,LTRIM(RTRIM(UPPER(secondary_run_concept))) AS run_concept_secondary
+		,LTRIM(RTRIM(UPPER(tertiary_run_concept))) AS run_concept_tertiary
+		,CASE WHEN LEFT(running_back_direction,1) = 'L' THEN 'LEFT'
+			  WHEN LEFT(running_back_direction,1) = 'R' THEN 'RIGHT'
+			  ELSE NULL
+		END AS rb_direction
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 9
+		GOTO PROC_END
+	END 
+		
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_run REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(10)
+
+	Penalty Information (Play Level)
+
+	STAGING TABLES:
+		stage_plays_play_penalty
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_penalty table 
+	DELETE FROM stage_plays_play_penalty
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_penalty
+		([pff_play_id]
+		,[penalty_pff_play]
+		,[penalty_declined_pff_play]
+		,[penalty_offsetting_pff_play]
+		,[penalty_facemask_play]
+		,[penalty_horse_collar_play]
+		,[penalty_illegal_use_of_hands_play]
+		,[penalty_defensive_holding_play]
+		,[penalty_defensive_offsides_play]
+		,[penalty_defensive_pass_interference_play]
+		,[penalty_encroachment_play]
+		,[penalty_illegal_contact_play]
+		,[penalty_neutral_zone_infraction_play]
+		,[penalty_roughing_the_passer_play]
+		,[penalty_taunting_play]
+		,[penalty_unnecessary_roughness_play]
+		,[penalty_offensive_holding_play]
+		,[penalty_offensive_pass_interference_play]
+		,[penalty_delay_of_game_play]
+		,[penalty_unsportsmanlike_conduct_play]
+		,[penalty_yards_pff_play])
+	SELECT play_id AS pff_play_id
+		,CASE WHEN penalty IS NOT NULL AND penalty <> '' THEN 1 ELSE 0 END AS penalty_pff_play
+		,CASE WHEN penalty LIKE '%(D)%' THEN 1 ELSE 0 END AS penalty_declined_pff_play
+		,CASE WHEN penalty LIKE '%(O)%' THEN 1 ELSE 0 END AS penalty_offsetting_pff_play
+		,CASE WHEN penalty LIKE '%FMM%' THEN 1 ELSE 0 END AS penalty_facemask_play
+		,CASE WHEN penalty LIKE '%HC%' THEN 1 ELSE 0 END AS penalty_horse_collar_play
+		,CASE WHEN penalty LIKE '%ILH%' THEN 1 ELSE 0 END AS penalty_illegal_use_of_hands_play
+		,CASE WHEN penalty LIKE '%DH%' THEN 1 ELSE 0 END AS penalty_defensive_holding_play
+		,CASE WHEN penalty LIKE '%DOF%' THEN 1 ELSE 0 END AS penalty_defensive_offsides_play
+		,CASE WHEN penalty LIKE '%DPI%' THEN 1 ELSE 0 END AS penalty_defensive_pass_interference_play
+		,CASE WHEN penalty LIKE '%ENC%' THEN 1 ELSE 0 END AS penalty_encroachment_play
+		,CASE WHEN penalty LIKE '%ICT%' THEN 1 ELSE 0 END AS penalty_illegal_contact_play
+		,CASE WHEN penalty LIKE '%NZI%' THEN 1 ELSE 0 END AS penalty_neutral_zone_infraction_play
+		,CASE WHEN penalty LIKE '%RPS%' THEN 1 ELSE 0 END AS penalty_roughing_the_passer_play
+		,CASE WHEN penalty LIKE '%TAU%' THEN 1 ELSE 0 END AS penalty_taunting_play
+		,CASE WHEN penalty LIKE '%UNR%' THEN 1 ELSE 0 END AS penalty_unnecessary_roughness_play
+		,CASE WHEN penalty LIKE '%OH%' THEN 1 ELSE 0 END AS penalty_offensive_holding_play
+		,CASE WHEN penalty LIKE '%OPI%' THEN 1 ELSE 0 END AS penalty_offensive_pass_interference_play
+		,CASE WHEN penalty LIKE '%DOG%' THEN 1 ELSE 0 END AS penalty_delay_of_game_play
+		,CASE WHEN penalty LIKE '%UNS%' THEN 1 ELSE 0 END AS penalty_unsportsmanlike_conduct_play
+		,CASE WHEN penalty <> '' AND penalty IS NOT NULL THEN penalty_yards ELSE 0 END AS penalty_yards_pff_play
+	FROM [PFFUltimate].[dbo].[plays]
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 10
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_penalty REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(11)
+	
+	Play Type Information
+
+	TEMP TABLES :
+		#temp_special_teams_plays
+
+	OUTPUT TABLES:
+		stage_plays_play_type
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_special_teams_plays exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_special_teams_plays') IS NOT NULL
+		DROP TABLE #temp_special_teams_plays
+
+	SELECT DISTINCT pfs.play_id AS pff_play_id
+	INTO #temp_special_teams_plays
+	FROM [PFFUltimate].[dbo].[special] pfs
+	INNER JOIN [PFFUltimate].[dbo].[plays] pfp
+		ON pfs.play_id = pfp.play_id
+	WHERE season >= @iSeason
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Play Type Information
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Clear data from the stage_plays_play_type table
+	DELETE FROM stage_plays_play_type
+	WHERE pff_play_id IN (SELECT pff_play_id FROM #temp_delete_play_list)
+
+	INSERT INTO stage_plays_play_type
+		([pff_play_id]
+		,[gsis_play_id]
+		,[is_qb_kneel]
+		,[is_qb_spike]
+		,[is_no_huddle]
+		,[is_pistol]
+		,[is_shotgun]
+		,[is_motion]
+		,[is_shift]
+		,[is_pass]
+		,[is_run]
+		,[is_play_action]
+		,[is_rollout]
+		,[is_scramble]
+		,[is_draw]
+		,[is_screen]
+		,[is_option]
+		,[is_pump_fake]
+		,[is_stunt]
+		,[is_trick_look]
+		,[is_trick_play]
+		,[dropback_type]
+		,[dropback_depth]
+		,[play_side]
+		,[is_lateral]
+		,[is_special_teams])
+	SELECT play_id AS pff_play_id
+		,ISNULL(gsis_play_id,0) AS gsis_play_id
+		,CASE WHEN LTRIM(RTRIM(UPPER(actual_poa))) = 'QB KNEEL' THEN 1 ELSE 0 END AS is_qb_kneel
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) = 'SPIKE' THEN 1 ELSE 0 END AS is_qb_spike	
+		,no_huddle AS is_no_huddle
+		,CASE WHEN LTRIM(RTRIM(UPPER(pistol))) = 'P' THEN 1 ELSE 0 END AS is_pistol
+		,CASE WHEN LTRIM(RTRIM(UPPER(shotgun))) = 'S' THEN 1 ELSE 0 END AS is_shotgun
+		,CASE WHEN shift_motion IS NOT NULL AND shift_motion LIKE '%*%' THEN 1 ELSE 0 END AS is_motion
+		,CASE WHEN shift_motion IS NOT NULL AND shift_motion NOT LIKE '%*%' THEN 1 ELSE 0 END AS is_shift
+		,CASE WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'P' THEN 1 ELSE 0 END AS is_pass
+		,CASE WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'R' THEN 1 ELSE 0 END AS is_run
+		,play_action AS is_play_action
+		,CASE WHEN LTRIM(RTRIM(UPPER(dropback_type))) LIKE 'R%' THEN 1 ELSE 0 END AS is_rollout
+		,CASE WHEN quarterback_scramble IS NOT NULL THEN 1 ELSE 0 END AS is_scramble
+		,draw AS is_draw
+		,screen AS is_screen
+		,[option] AS is_option
+		,pump_fake AS is_pump_fake
+		,stunt AS is_stunt
+		,trick_look AS is_trick_look
+		,trick_play AS is_trick_play
+		-----------Drop Back Information
+		,CASE WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'SD' THEN 'STRAIGHT DROP'
+		        WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'SR' THEN 'SCRAMBLE RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'SL' THEN 'SCRAMBLE LEFT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RR' THEN 'ROLL RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RSR' THEN 'ROLL SCRAMBLE RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RL' THEN 'ROLL LEFT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RSL' THEN 'ROLL SCRAMBLE LEFT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RRL' THEN 'ROLL RIGHT SCRAMBLE LEFT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'RLR' THEN 'ROLL LEFT SCRAMBLE RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'TR' THEN 'TRICK RIGHT'
+				WHEN LTRIM(RTRIM(UPPER(dropback_type))) = 'TL' THEN 'TRICK LEFT'
+				ELSE CASE WHEN LEN(dropback_type) > 0 THEN 'OTHER' ELSE NULL END		   
+		END AS dropback_type
+		,dropback_depth
+		,CASE WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'P' THEN
+		           CASE WHEN LTRIM(RTRIM(UPPER(pass_zone))) IN ('1L','2L','3L') OR (LTRIM(RTRIM(UPPER(pass_result))) IN ('RUN','SACK','HIT AS THREW') AND UPPER(dropback_type) IN ('RL','RSL','SL')) THEN 'LEFT' 							
+				        WHEN LTRIM(RTRIM(UPPER(pass_zone))) IN ('4') OR (LTRIM(RTRIM(UPPER(pass_result))) IN ('RUN','SACK','HIT AS THREW') AND UPPER(dropback_type) LIKE '%SD%') THEN 'MIDDLE'
+				        WHEN LTRIM(RTRIM(UPPER(pass_zone))) IN ('5R','6R','7R') OR (LTRIM(RTRIM(UPPER(pass_result))) IN ('RUN','SACK','HIT AS THREW') AND UPPER(dropback_type) IN ('RR','RSR','SR')) THEN 'RIGHT'
+				        ELSE NULL
+					END --Ends section where play was a pass
+				WHEN LTRIM(RTRIM(UPPER(run_pass))) = 'R' THEN
+					CASE WHEN LTRIM(RTRIM(UPPER(actual_poa))) IN ('LE','LT') OR UPPER(actual_poa) LIKE ('%LEFT%') THEN 'LEFT'
+							WHEN LTRIM(RTRIM(UPPER(actual_poa))) IN ('LG','ML','MR','RG') THEN 'MIDDLE'
+							WHEN LTRIM(RTRIM(UPPER(actual_poa))) IN ('RE','RT') OR LTRIM(RTRIM(UPPER(actual_poa))) LIKE ('%RIGHT%') THEN 'RIGHT'
+							ELSE NULL
+					END --Ends section where play was a run
+				ELSE NULL
+		END AS play_side
+		,CASE WHEN LTRIM(RTRIM(UPPER(pass_result))) = 'LATERAL' THEN 1 ELSE 0 END AS is_lateral
+		,CASE WHEN st.pff_play_id IS NOT NULL THEN 1 ELSE 0 END AS is_special_teams
+	FROM [PFFUltimate].[dbo].[plays] pl
+	LEFT JOIN #temp_special_teams_plays st
+		ON pl.play_id = st.pff_play_id
+	WHERE season >= @iSeason
+
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 11
+		GOTO PROC_END
+	END 
+
+	-- Rebuild the index
+	ALTER INDEX ALL ON stage_plays_play_type REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	-- Drop the temp tables
+	DROP TABLE #temp_special_teams_plays
+
+
+PROC_END:
+
+	RETURN @oReturnCD  
+
+END
+
+
+GO
+
+
