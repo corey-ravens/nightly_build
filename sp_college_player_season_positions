@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_season_position_offense_college]    Script Date: 5/16/2022 10:37:25 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_college_player_season_positions]    Script Date: 5/16/2022 10:10:04 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -15,13 +15,21 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_analysis_players_season_position_offense_college] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_college_player_season_positions] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_analysis_players_season_position_offense_college
+Procedure Name:	sp_college_player_season_positions
 Author:			Corey Krawiec
-Creation Date:	8/11/2017
+Creation Date:	08/31/2021
 Description:       
 
 
@@ -31,14 +39,37 @@ Description:
 	is his final season position.
 
 	To come up with a season position for a player we count the position
-	he played most often.	
+	he played most often.  Safeties need more specific calculations so that
+	happens after the initial position counting.	
+	
 
-	(1) Count up and rank snaps by position
-	(2) Count up and rank snaps by receiver type
-	(3) Combine the position and receiver type and snap counts into an analysis_ table
+Steps:
+
+	DEFENSE
+
+	(1) ALL defense position
+	(2) BASE defense position
+	(3) SUB defense position
+	(4) PASS defense position
+	(5) RUN defense position
+	(6) Season Position Table
+	(7) ALL defense role
+	(8) BASE defense role
+	(9) SUB defense role
+	(10) PASS defense role
+	(11) RUN defense role
+	(12) Safety position classification
+
+	OFFENSE
+
+	(13) Offense position
+	(14) Receiver type/role
+	
+	(15) Write both to permanent table 
+
 
 Input Parameters:
-	iSeason
+	@iSeason
 	
 Output Parameters:
 	None 
@@ -52,16 +83,21 @@ BEGIN
 
 	set @oReturnCD = 0 
 
-
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
 	(1)
-	
-	First find a season position for every offensive player.
 
-	Sum up snaps by position for each player.
+	ALL Snaps Position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(1)(a)
+
+	Sum up ALL snaps by position for each player.
 
 	OUTPUT TABLES:
 	#temp_position_snap_counts_season_all
@@ -76,23 +112,27 @@ BEGIN
 		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
 		,an.season
 		,an.season_type_adjusted
-	----------Overall Position Counts
-		,SUM(CASE WHEN position_blt = 'QB' THEN 1 ELSE 0 END) AS [QB]
-		,SUM(CASE WHEN position_blt = 'RB' THEN 1 ELSE 0 END) AS [RB]
-		,SUM(CASE WHEN position_blt = 'FB' THEN 1 ELSE 0 END) AS [FB]
-		,SUM(CASE WHEN position_blt = 'LT' THEN 1 ELSE 0 END) AS [LOT]
-		,SUM(CASE WHEN position_blt = 'LG' THEN 1 ELSE 0 END) AS [LOG]
-		,SUM(CASE WHEN position_blt = 'OC' THEN 1 ELSE 0 END) AS [OC]
-		,SUM(CASE WHEN position_blt = 'RG' THEN 1 ELSE 0 END) AS [ROG]
-		,SUM(CASE WHEN position_blt = 'RT' THEN 1 ELSE 0 END) AS [ROT]
-		,SUM(CASE WHEN position_blt = 'TE' THEN 1 ELSE 0 END) AS [TE]
-		,SUM(CASE WHEN position_blt = 'WR' THEN 1 ELSE 0 END) AS [WR]
+		,SUM(CASE WHEN position_blt = 'NT' THEN 1 ELSE 0 END) AS [NT]
+		,SUM(CASE WHEN position_blt = 'DT3T' THEN 1 ELSE 0 END) AS [DT3T]
+		,SUM(CASE WHEN position_blt = 'DE5T' THEN 1 ELSE 0 END) AS [DE5T]
+		,SUM(CASE WHEN position_blt = 'DE43' THEN 1 ELSE 0 END) AS [DE43]
+		,SUM(CASE WHEN position_blt = 'RUSH' THEN 1 ELSE 0 END) AS [RUSH]
+		,SUM(CASE WHEN position_blt = 'SAM' THEN 1 ELSE 0 END) AS [SAM]
+		,SUM(CASE WHEN position_blt IN ('RUSH','SAM') THEN 1 ELSE 0 END) AS [OB34]
+		,SUM(CASE WHEN position_blt = 'MIKE' THEN 1 ELSE 0 END) AS [MIKE]
+		,SUM(CASE WHEN position_blt = 'WILL' THEN 1 ELSE 0 END) AS [WILL]
+		,SUM(CASE WHEN position_blt IN ('MIKE','WILL') THEN 1 ELSE 0 END) AS [IB]
+		,SUM(CASE WHEN position_blt = 'CB' THEN 1 ELSE 0 END) AS [CB]
+		,SUM(CASE WHEN position_blt = 'NB' THEN 1 ELSE 0 END) AS [NB]
+		,SUM(CASE WHEN position_blt IN ('SS','FS') THEN 1 ELSE 0 END) AS [DS]
+		,SUM(CASE WHEN position_blt IN ('SS') THEN 1 ELSE 0 END) AS [SS]
+		,SUM(CASE WHEN position_blt IN ('FS') THEN 1 ELSE 0 END) AS [FS]
 	INTO #temp_position_snap_counts_season_all
-	FROM [stage_plays_player_offensive_alignment_college] pos
-	INNER JOIN [stage_plays_play_type_college] pt
-		ON pos.pff_play_id=pt.pff_play_id
-	INNER JOIN [stage_plays_play_ancillary_college] an
-		ON pos.pff_play_id=an.pff_play_id
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
 	WHERE an.season >= @iSeason
 		AND is_no_play = 0 
 		AND is_qb_kneel = 0
@@ -103,10 +143,12 @@ BEGIN
 		,an.season_type_adjusted
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	Unpivot the snaps table so you have a different row for each position a player has snaps at.
+
+	(1)(b)
+
+	Unpivot the ALL snaps table so you have a different row for each position a player has snaps at.
 
 	OUTPUT TABLES:
 	#temp_position_snap_counts_season_unpivot_all
@@ -125,13 +167,15 @@ BEGIN
 		,position_counts.snap_count
 	INTO #temp_position_snap_counts_season_unpivot_all
 	FROM #temp_position_snap_counts_season_all
-	UNPIVOT (snap_count FOR position_blt IN (QB,RB,FB,LOT,[LOG],OC,ROG,ROT,TE,WR)) AS position_counts
-
+	UNPIVOT (snap_count FOR position_blt IN (NT,DT3T,DE5T,DE43,OB34,IB,CB,NB,DS)) AS position_counts
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	Rank the snap counts - the highest one is the player's season position.
+
+	(1)(c)
+
+	Rank the ALL snap counts - the highest one is the player's season position.
 
 	OUTPUT TABLES:
 	#temp_position_snap_counts_season_rank_all
@@ -155,6 +199,1462 @@ BEGIN
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)
+
+	BASE Snaps Position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)(a)
+
+	Sum up BASE snaps by position for each player.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_base') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN position_blt = 'NT' THEN 1 ELSE 0 END) AS [NT]
+		,SUM(CASE WHEN position_blt = 'DT3T' THEN 1 ELSE 0 END) AS [DT3T]
+		,SUM(CASE WHEN position_blt = 'DE5T' THEN 1 ELSE 0 END) AS [DE5T]
+		,SUM(CASE WHEN position_blt = 'DE43' THEN 1 ELSE 0 END) AS [DE43]
+		,SUM(CASE WHEN position_blt = 'RUSH' THEN 1 ELSE 0 END) AS [RUSH]
+		,SUM(CASE WHEN position_blt = 'SAM' THEN 1 ELSE 0 END) AS [SAM]
+		,SUM(CASE WHEN position_blt IN ('RUSH','SAM') THEN 1 ELSE 0 END) AS [OB34]
+		,SUM(CASE WHEN position_blt = 'MIKE' THEN 1 ELSE 0 END) AS [MIKE]
+		,SUM(CASE WHEN position_blt = 'WILL' THEN 1 ELSE 0 END) AS [WILL]
+		,SUM(CASE WHEN position_blt IN ('MIKE','WILL') THEN 1 ELSE 0 END) AS [IB]
+		,SUM(CASE WHEN position_blt = 'CB' THEN 1 ELSE 0 END) AS [CB]
+		,SUM(CASE WHEN position_blt = 'NB' THEN 1 ELSE 0 END) AS [NB]
+		,SUM(CASE WHEN position_blt IN ('SS','FS') THEN 1 ELSE 0 END) AS [DS]
+		,SUM(CASE WHEN position_blt IN ('SS') THEN 1 ELSE 0 END) AS [SS]
+		,SUM(CASE WHEN position_blt IN ('FS') THEN 1 ELSE 0 END) AS [FS]
+	INTO #temp_position_snap_counts_season_base
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0
+		AND base_or_sub = 'BASE'
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)(b)
+
+	Unpivot the BASE snaps table so you have a different row for each position a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_unpivot_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_unpivot_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_unpivot_base') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_unpivot_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.position_blt
+		,position_counts.snap_count
+	INTO #temp_position_snap_counts_season_unpivot_base
+	FROM #temp_position_snap_counts_season_base
+	UNPIVOT (snap_count FOR position_blt IN (NT,DT3T,DE5T,DE43,OB34,IB,CB,NB,DS)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)(c)
+
+	Rank the BASE snap counts - the highest one is the player's season position.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_rank_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_rank_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_rank_base') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_rank_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_blt
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, position_blt) AS snap_count_order
+	INTO #temp_position_snap_counts_season_rank_base
+	FROM #temp_position_snap_counts_season_unpivot_base
+	WHERE snap_count > 0
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(3)
+
+	SUB Snaps Position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(3)(a)
+
+	Sum up SUB snaps by position for each player.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_sub') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN position_blt = 'NT' THEN 1 ELSE 0 END) AS [NT]
+		,SUM(CASE WHEN position_blt = 'DT3T' THEN 1 ELSE 0 END) AS [DT3T]
+		,SUM(CASE WHEN position_blt = 'DE5T' THEN 1 ELSE 0 END) AS [DE5T]
+		,SUM(CASE WHEN position_blt = 'DE43' THEN 1 ELSE 0 END) AS [DE43]
+		,SUM(CASE WHEN position_blt = 'RUSH' THEN 1 ELSE 0 END) AS [RUSH]
+		,SUM(CASE WHEN position_blt = 'SAM' THEN 1 ELSE 0 END) AS [SAM]
+		,SUM(CASE WHEN position_blt IN ('RUSH','SAM') THEN 1 ELSE 0 END) AS [OB34]
+		,SUM(CASE WHEN position_blt = 'MIKE' THEN 1 ELSE 0 END) AS [MIKE]
+		,SUM(CASE WHEN position_blt = 'WILL' THEN 1 ELSE 0 END) AS [WILL]
+		,SUM(CASE WHEN position_blt IN ('MIKE','WILL') THEN 1 ELSE 0 END) AS [IB]
+		,SUM(CASE WHEN position_blt = 'CB' THEN 1 ELSE 0 END) AS [CB]
+		,SUM(CASE WHEN position_blt = 'NB' THEN 1 ELSE 0 END) AS [NB]
+		,SUM(CASE WHEN position_blt IN ('SS','FS') THEN 1 ELSE 0 END) AS [DS]
+		,SUM(CASE WHEN position_blt IN ('SS') THEN 1 ELSE 0 END) AS [SS]
+		,SUM(CASE WHEN position_blt IN ('FS') THEN 1 ELSE 0 END) AS [FS]
+	INTO #temp_position_snap_counts_season_sub
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	 
+		AND base_or_sub = 'SUB'
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(3)(b)
+
+	Unpivot the SUB snaps table so you have a different row for each position a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_unpivot_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_unpivot_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_unpivot_sub') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_unpivot_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.position_blt
+		,position_counts.snap_count
+	INTO #temp_position_snap_counts_season_unpivot_sub
+	FROM #temp_position_snap_counts_season_sub
+	UNPIVOT (snap_count FOR position_blt IN (NT,DT3T,DE5T,DE43,OB34,IB,CB,NB,DS)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(3)(c)
+
+	Rank the SUB snap counts - the highest one is the player's season position.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_rank_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_rank_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_rank_sub') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_rank_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_blt
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, position_blt) AS snap_count_order
+	INTO #temp_position_snap_counts_season_rank_sub
+	FROM #temp_position_snap_counts_season_unpivot_sub
+	WHERE snap_count > 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(4)
+
+	PASS Snaps Position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(4)(a)
+
+	Sum up PASS snaps by position for each player.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_pass') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN position_blt = 'NT' THEN 1 ELSE 0 END) AS [NT]
+		,SUM(CASE WHEN position_blt = 'DT3T' THEN 1 ELSE 0 END) AS [DT3T]
+		,SUM(CASE WHEN position_blt = 'DE5T' THEN 1 ELSE 0 END) AS [DE5T]
+		,SUM(CASE WHEN position_blt = 'DE43' THEN 1 ELSE 0 END) AS [DE43]
+		,SUM(CASE WHEN position_blt = 'RUSH' THEN 1 ELSE 0 END) AS [RUSH]
+		,SUM(CASE WHEN position_blt = 'SAM' THEN 1 ELSE 0 END) AS [SAM]
+		,SUM(CASE WHEN position_blt IN ('RUSH','SAM') THEN 1 ELSE 0 END) AS [OB34]
+		,SUM(CASE WHEN position_blt = 'MIKE' THEN 1 ELSE 0 END) AS [MIKE]
+		,SUM(CASE WHEN position_blt = 'WILL' THEN 1 ELSE 0 END) AS [WILL]
+		,SUM(CASE WHEN position_blt IN ('MIKE','WILL') THEN 1 ELSE 0 END) AS [IB]
+		,SUM(CASE WHEN position_blt = 'CB' THEN 1 ELSE 0 END) AS [CB]
+		,SUM(CASE WHEN position_blt = 'NB' THEN 1 ELSE 0 END) AS [NB]
+		,SUM(CASE WHEN position_blt IN ('SS','FS') THEN 1 ELSE 0 END) AS [DS]
+		,SUM(CASE WHEN position_blt IN ('SS') THEN 1 ELSE 0 END) AS [SS]
+		,SUM(CASE WHEN position_blt IN ('FS') THEN 1 ELSE 0 END) AS [FS]
+	INTO #temp_position_snap_counts_season_pass
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0
+		AND is_pass = 1
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(4)(b)
+
+	Unpivot the PASS snaps table so you have a different row for each position a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_unpivot_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_unpivot_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_unpivot_pass') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_unpivot_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.position_blt
+		,position_counts.snap_count
+	INTO #temp_position_snap_counts_season_unpivot_pass
+	FROM #temp_position_snap_counts_season_pass
+	UNPIVOT (snap_count FOR position_blt IN (NT,DT3T,DE5T,DE43,OB34,IB,CB,NB,DS)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(4)(c)
+
+	Rank the PASS snap counts - the highest one is the player's season position.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_rank_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_rank_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_rank_pass') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_rank_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_blt
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, position_blt) AS snap_count_order
+	INTO #temp_position_snap_counts_season_rank_pass
+	FROM #temp_position_snap_counts_season_unpivot_pass
+	WHERE snap_count > 0
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(5)
+
+	RUN Snaps Position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(5)(a)
+
+	Sum up RUN snaps by position for each player.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_run
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_run exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_run') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_run
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN position_blt = 'NT' THEN 1 ELSE 0 END) AS [NT]
+		,SUM(CASE WHEN position_blt = 'DT3T' THEN 1 ELSE 0 END) AS [DT3T]
+		,SUM(CASE WHEN position_blt = 'DE5T' THEN 1 ELSE 0 END) AS [DE5T]
+		,SUM(CASE WHEN position_blt = 'DE43' THEN 1 ELSE 0 END) AS [DE43]
+		,SUM(CASE WHEN position_blt = 'RUSH' THEN 1 ELSE 0 END) AS [RUSH]
+		,SUM(CASE WHEN position_blt = 'SAM' THEN 1 ELSE 0 END) AS [SAM]
+		,SUM(CASE WHEN position_blt IN ('RUSH','SAM') THEN 1 ELSE 0 END) AS [OB34]
+		,SUM(CASE WHEN position_blt = 'MIKE' THEN 1 ELSE 0 END) AS [MIKE]
+		,SUM(CASE WHEN position_blt = 'WILL' THEN 1 ELSE 0 END) AS [WILL]
+		,SUM(CASE WHEN position_blt IN ('MIKE','WILL') THEN 1 ELSE 0 END) AS [IB]
+		,SUM(CASE WHEN position_blt = 'CB' THEN 1 ELSE 0 END) AS [CB]
+		,SUM(CASE WHEN position_blt = 'NB' THEN 1 ELSE 0 END) AS [NB]
+		,SUM(CASE WHEN position_blt IN ('SS','FS') THEN 1 ELSE 0 END) AS [DS]
+		,SUM(CASE WHEN position_blt IN ('SS') THEN 1 ELSE 0 END) AS [SS]
+		,SUM(CASE WHEN position_blt IN ('FS') THEN 1 ELSE 0 END) AS [FS]
+	INTO #temp_position_snap_counts_season_run
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0
+		AND is_run = 1
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(5)(b)
+
+	Unpivot the RUN snaps table so you have a different row for each position a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_unpivot_run
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_unpivot_run exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_unpivot_run') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_unpivot_run
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.position_blt
+		,position_counts.snap_count
+	INTO #temp_position_snap_counts_season_unpivot_run
+	FROM #temp_position_snap_counts_season_run
+	UNPIVOT (snap_count FOR position_blt IN (NT,DT3T,DE5T,DE43,OB34,IB,CB,NB,DS)) AS position_counts
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(5)(c)
+
+	Rank the RUN snap counts - the highest one is the player's season position.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_rank_run
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_rank_run exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_rank_run') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_rank_run
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_blt
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, position_blt) AS snap_count_order
+	INTO #temp_position_snap_counts_season_rank_run
+	FROM #temp_position_snap_counts_season_unpivot_run
+	WHERE snap_count > 0
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(6)
+
+	Create the final Player Season position table.
+
+	BASE comes first so that the defense_type variable is 4 characters long instead of 3.
+
+	OUTPUT TABLES:
+	#temp_seasons_position
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_seasons_position exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_seasons_position') IS NOT NULL
+		DROP TABLE #temp_seasons_position
+
+	--Insert BASE Position Rows
+	SELECT b.gsis_player_id
+		,b.season
+		,b.season_type_adjusted
+		,'BASE' AS defense_type
+		,position_blt
+		,[NT] AS snap_count_nt
+		,[DT3T] AS snap_count_dt3t
+		,[DE5T] AS snap_count_de5t
+		,[DE43] AS snap_count_de43
+		,[RUSH] AS snap_count_rush
+		,[SAM] AS snap_count_sam	
+		,[OB34] AS snap_count_ob34  	
+		,[MIKE] AS snap_count_mike
+		,[WILL] AS snap_count_will
+		,[IB] AS snap_count_ib
+		,[CB] AS snap_count_cb
+		,[NB] AS snap_count_nb
+		,[DS] AS snap_count_ds
+		,[FS] AS snap_count_fs
+		,[SS] AS snap_count_ss	
+	INTO #temp_seasons_position
+	FROM #temp_position_snap_counts_season_rank_base b
+	INNER JOIN #temp_position_snap_counts_season_base cb
+		ON b.gsis_player_id = cb.gsis_player_id
+		AND b.season = cb.season
+		AND b.season_type_adjusted = cb.season_type_adjusted
+	WHERE snap_count_order = 1
+
+--Insert ALL Position Rows
+	INSERT INTO #temp_seasons_position
+	SELECT a.gsis_player_id
+		,a.season
+		,a.season_type_adjusted
+		,'ALL' AS defense_type
+		,position_blt
+		,[NT] AS snap_count_nt
+		,[DT3T] AS snap_count_dt3t
+		,[DE5T] AS snap_count_de5t
+		,[DE43] AS snap_count_de43
+		,[RUSH] AS snap_count_rush
+		,[SAM] AS snap_count_sam	
+		,[OB34] AS snap_count_ob34  	
+		,[MIKE] AS snap_count_mike
+		,[WILL] AS snap_count_will
+		,[IB] AS snap_count_ib
+		,[CB] AS snap_count_cb
+		,[NB] AS snap_count_nb
+		,[DS] AS snap_count_ds
+		,[FS] AS snap_count_fs
+		,[SS] AS snap_count_ss	
+	FROM #temp_position_snap_counts_season_rank_all a
+	INNER JOIN #temp_position_snap_counts_season_all ca
+		ON a.gsis_player_id = ca.gsis_player_id
+		AND a.season = ca.season
+		AND a.season_type_adjusted = ca.season_type_adjusted
+	WHERE snap_count_order = 1
+
+--Insert SUB Position Rows
+	INSERT INTO #temp_seasons_position
+	SELECT s.gsis_player_id
+		,s.season
+		,s.season_type_adjusted
+		,'SUB' AS defense_type
+		,position_blt
+		,[NT] AS snap_count_nt
+		,[DT3T] AS snap_count_dt3t
+		,[DE5T] AS snap_count_de5t
+		,[DE43] AS snap_count_de43
+		,[RUSH] AS snap_count_rush
+		,[SAM] AS snap_count_sam	
+		,[OB34] AS snap_count_ob34  	
+		,[MIKE] AS snap_count_mike
+		,[WILL] AS snap_count_will
+		,[IB] AS snap_count_ib
+		,[CB] AS snap_count_cb
+		,[NB] AS snap_count_nb
+		,[DS] AS snap_count_ds
+		,[FS] AS snap_count_fs
+		,[SS] AS snap_count_ss
+	FROM #temp_position_snap_counts_season_rank_sub s
+	INNER JOIN #temp_position_snap_counts_season_sub cs
+		ON s.gsis_player_id = cs.gsis_player_id
+		AND s.season = cs.season
+		AND s.season_type_adjusted = cs.season_type_adjusted
+	WHERE snap_count_order = 1
+
+--Insert PASS Position Rows
+	INSERT INTO #temp_seasons_position
+	SELECT p.gsis_player_id
+		,p.season
+		,p.season_type_adjusted
+		,'PASS' AS defense_type
+		,position_blt
+		,[NT] AS snap_count_nt
+		,[DT3T] AS snap_count_dt3t
+		,[DE5T] AS snap_count_de5t
+		,[DE43] AS snap_count_de43
+		,[RUSH] AS snap_count_rush
+		,[SAM] AS snap_count_sam	
+		,[OB34] AS snap_count_ob34  	
+		,[MIKE] AS snap_count_mike
+		,[WILL] AS snap_count_will
+		,[IB] AS snap_count_ib
+		,[CB] AS snap_count_cb
+		,[NB] AS snap_count_nb
+		,[DS] AS snap_count_ds
+		,[FS] AS snap_count_fs
+		,[SS] AS snap_count_ss	  
+	FROM #temp_position_snap_counts_season_rank_pass p
+	INNER JOIN #temp_position_snap_counts_season_pass cp
+		ON p.gsis_player_id = cp.gsis_player_id
+		AND p.season = cp.season
+		AND p.season_type_adjusted = cp.season_type_adjusted
+	WHERE snap_count_order = 1
+
+--Insert RUN Position Rows
+	INSERT INTO #temp_seasons_position
+	SELECT r.gsis_player_id
+		,r.season
+		,r.season_type_adjusted
+		,'RUN' AS defense_type
+		,position_blt
+		,[NT] AS snap_count_nt
+		,[DT3T] AS snap_count_dt3t
+		,[DE5T] AS snap_count_de5t
+		,[DE43] AS snap_count_de43
+		,[RUSH] AS snap_count_rush
+		,[SAM] AS snap_count_sam	
+		,[OB34] AS snap_count_ob34  	
+		,[MIKE] AS snap_count_mike
+		,[WILL] AS snap_count_will
+		,[IB] AS snap_count_ib
+		,[CB] AS snap_count_cb
+		,[NB] AS snap_count_nb
+		,[DS] AS snap_count_ds
+		,[FS] AS snap_count_fs
+		,[SS] AS snap_count_ss	 
+	FROM #temp_position_snap_counts_season_rank_run r
+	INNER JOIN #temp_position_snap_counts_season_run cr
+		ON r.gsis_player_id = cr.gsis_player_id
+		AND r.season = cr.season
+		AND r.season_type_adjusted = cr.season_type_adjusted
+	WHERE snap_count_order = 1
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(7)
+
+	ALL Snaps Role
+
+	In addition to coming up with a season position, we want a season ROLE
+	(this is mainly for outside linebackers). Is he more of a rush or
+	coverage LB?
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(7)(a)
+
+	Sum up ALL snaps by role for each player.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_all
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_all exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_all') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_all
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		--,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'RUN DEFENSE' THEN 1 ELSE 0 END) AS [role_run_defense]
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'COVERAGE' THEN 1 ELSE 0 END) AS [role_coverage]
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'PASS RUSH' THEN 1 ELSE 0 END) AS [role_pass_rush]
+	INTO #temp_role_snap_counts_season_all
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(7)(b)
+
+	Unpivot the ALL roles table so you have a different row for each role a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_unpivot_all
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_unpivot_all exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_unpivot_all') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_unpivot_all
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.role_pff
+		,position_counts.snap_count
+	INTO #temp_role_snap_counts_season_unpivot_all
+	FROM #temp_role_snap_counts_season_all
+	UNPIVOT (snap_count FOR role_pff IN (role_coverage,role_pass_rush)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(7)(c)
+
+	Rank the ALL snap counts - the highest one is the player's season role.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_rank_all
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_rank_all exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_rank_all') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_rank_all
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,role_pff
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, role_pff) AS snap_count_order
+	INTO #temp_role_snap_counts_season_rank_all
+	FROM #temp_role_snap_counts_season_unpivot_all
+	WHERE snap_count > 0
+	
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(8)
+
+	BASE Snaps Role
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(8)(a)
+
+	Sum up BASE snaps by role for each player.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_base') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'COVERAGE' THEN 1 ELSE 0 END) AS [role_coverage]
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'PASS RUSH' THEN 1 ELSE 0 END) AS [role_pass_rush]
+	INTO #temp_role_snap_counts_season_base
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	
+		AND base_or_sub = 'BASE'
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(8)(b)
+
+	Unpivot the BASE roles table so you have a different row for each role a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_unpivot_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_unpivot_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_unpivot_base') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_unpivot_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.role_pff
+		,position_counts.snap_count
+	INTO #temp_role_snap_counts_season_unpivot_base
+	FROM #temp_role_snap_counts_season_base
+	UNPIVOT (snap_count FOR role_pff IN (role_coverage,role_pass_rush)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(8)(c)
+
+	Rank the BASE snap counts - the highest one is the player's season role.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_rank_base
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_rank_base exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_rank_base') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_rank_base
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,role_pff
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, role_pff) AS snap_count_order
+	INTO #temp_role_snap_counts_season_rank_base
+	FROM #temp_role_snap_counts_season_unpivot_base
+	WHERE snap_count > 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(9)
+
+	SUB Snaps Role
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(9)(a)
+
+	Sum up SUB snaps by role for each player.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_sub') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'COVERAGE' THEN 1 ELSE 0 END) AS [role_coverage]
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'PASS RUSH' THEN 1 ELSE 0 END) AS [role_pass_rush]
+	INTO #temp_role_snap_counts_season_sub
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	
+		AND base_or_sub = 'SUB'
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(9)(b)
+
+	Unpivot the SUB roles table so you have a different row for each role a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_unpivot_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_unpivot_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_unpivot_sub') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_unpivot_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.role_pff
+		,position_counts.snap_count
+	INTO #temp_role_snap_counts_season_unpivot_sub
+	FROM #temp_role_snap_counts_season_sub
+	UNPIVOT (snap_count FOR role_pff IN (role_coverage,role_pass_rush)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(9)(c)
+
+	Rank the SUB snap counts - the highest one is the player's season role.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_rank_sub
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_rank_sub exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_rank_sub') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_rank_sub
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,role_pff
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, role_pff) AS snap_count_order
+	INTO #temp_role_snap_counts_season_rank_sub
+	FROM #temp_role_snap_counts_season_unpivot_sub
+	WHERE snap_count > 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(10)
+
+	PASS Snaps Role
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(10)(a)
+
+	Sum up PASS snaps by role for each player.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_pass') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'COVERAGE' THEN 1 ELSE 0 END) AS [role_coverage]
+		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(role_pff))) = 'PASS RUSH' THEN 1 ELSE 0 END) AS [role_pass_rush]
+	INTO #temp_role_snap_counts_season_pass
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	
+		AND is_pass = 1
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(10)(b)
+
+	Unpivot the PASS roles table so you have a different row for each role a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_unpivot_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_unpivot_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_unpivot_pass') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_unpivot_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.role_pff
+		,position_counts.snap_count
+	INTO #temp_role_snap_counts_season_unpivot_pass
+	FROM #temp_role_snap_counts_season_pass
+	UNPIVOT (snap_count FOR role_pff IN (role_coverage,role_pass_rush)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(10)(c)
+
+	Rank the PASS snap counts - the highest one is the player's season role.
+
+	OUTPUT TABLES:
+	#temp_role_snap_counts_season_rank_pass
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_role_snap_counts_season_rank_pass exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_role_snap_counts_season_rank_pass') IS NOT NULL
+		DROP TABLE #temp_role_snap_counts_season_rank_pass
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,role_pff
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, role_pff) AS snap_count_order
+	INTO #temp_role_snap_counts_season_rank_pass
+	FROM #temp_role_snap_counts_season_unpivot_pass
+	WHERE snap_count > 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(11)
+
+	Create the final Player Season role table
+
+	OUTPUT TABLES:
+	#temp_seasons_role
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_seasons_role exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_seasons_role') IS NOT NULL
+		DROP TABLE #temp_seasons_role
+
+	SELECT rb.gsis_player_id
+		,rb.season
+		,rb.season_type_adjusted
+		,'BASE' AS defense_type
+		,CASE WHEN role_pff = 'role_coverage' THEN 'COVG'
+			WHEN role_pff = 'role_pass_rush' THEN 'RUSH'
+			ELSE NULL
+		END AS role_pff
+		,[role_coverage] AS snap_count_coverage
+		,[role_pass_rush] AS snap_count_pass_rush
+	INTO #temp_seasons_role 
+	FROM #temp_role_snap_counts_season_rank_base rb
+	INNER JOIN #temp_role_snap_counts_season_base cb
+		ON rb.gsis_player_id = cb.gsis_player_id
+		AND rb.season = cb.season
+		AND rb.season_type_adjusted = cb.season_type_adjusted
+	WHERE snap_count_order = 1
+
+	INSERT INTO #temp_seasons_role
+	SELECT ra.gsis_player_id
+		,ra.season
+		,ra.season_type_adjusted
+		,'ALL' AS defense_type
+		,CASE WHEN role_pff = 'role_coverage' THEN 'COVG'
+			WHEN role_pff = 'role_pass_rush' THEN 'RUSH'
+			ELSE NULL
+		END AS role_pff
+		,[role_coverage] AS snap_count_coverage
+		,[role_pass_rush] AS snap_count_pass_rush
+	FROM #temp_role_snap_counts_season_rank_all ra
+	INNER JOIN #temp_role_snap_counts_season_all ca
+		ON ra.gsis_player_id = ca.gsis_player_id
+		AND ra.season = ca.season
+		AND ra.season_type_adjusted = ca.season_type_adjusted
+	WHERE snap_count_order = 1
+
+	INSERT INTO #temp_seasons_role
+	SELECT rs.gsis_player_id
+		,rs.season
+		,rs.season_type_adjusted
+		,'SUB' AS defense_type
+		,CASE WHEN role_pff = 'role_coverage' THEN 'COVG'
+			WHEN role_pff = 'role_pass_rush' THEN 'RUSH'
+			ELSE NULL
+		END AS role_pff
+		,[role_coverage] AS snap_count_coverage
+		,[role_pass_rush] AS snap_count_pass_rush
+	FROM #temp_role_snap_counts_season_rank_sub rs
+	INNER JOIN #temp_role_snap_counts_season_sub cs
+		ON rs.gsis_player_id = cs.gsis_player_id
+		AND rs.season = cs.season
+		AND rs.season_type_adjusted = cs.season_type_adjusted
+	WHERE snap_count_order = 1
+
+	INSERT INTO #temp_seasons_role
+	SELECT rp.gsis_player_id
+		,rp.season
+		,rp.season_type_adjusted
+		,'PASS' AS defense_type
+		,CASE WHEN role_pff = 'role_coverage' THEN 'COVG'
+			WHEN role_pff = 'role_pass_rush' THEN 'RUSH'
+			ELSE NULL
+		END AS role_pff
+		,[role_coverage] AS snap_count_coverage
+		,[role_pass_rush] AS snap_count_pass_rush
+	FROM #temp_role_snap_counts_season_rank_pass rp
+	INNER JOIN #temp_role_snap_counts_season_pass cp
+		ON rp.gsis_player_id = cp.gsis_player_id
+		AND rp.season = cp.season
+		AND rp.season_type_adjusted = cp.season_type_adjusted
+	WHERE snap_count_order = 1
+
+	 
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(12)
+
+
+	Safeties need their own special position logic, so the next few steps determine what safety type to classify a player as
+	in the event his most played position is safety.
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(12)(a)
+
+	Sum up the different safety position counts.
+
+	OUTPUT TABLES:
+	#temp_safety_snap_counts_season
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_safety_snap_counts_season, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_safety_snap_counts_season') IS NOT NULL
+		DROP TABLE #temp_safety_snap_counts_season
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+	-----------ALL
+	-----------Middle of Field Open safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'OPEN' THEN 1 ELSE 0 END) AS safety_class_all_open_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'OPEN' THEN 1 ELSE 0 END) AS safety_class_all_open_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'OPEN' THEN 1 ELSE 0 END) AS safety_class_all_open_free
+	-----------Middle of Field Closed safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'CLOSED' THEN 1 ELSE 0 END) AS safety_class_all_closed_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'CLOSED' THEN 1 ELSE 0 END) AS safety_class_all_closed_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'CLOSED' THEN 1 ELSE 0 END) AS safety_class_all_closed_free
+	-----------Middle of Field NULL safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played IS NULL THEN 1 ELSE 0 END) AS safety_class_all_null_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played IS NULL THEN 1 ELSE 0 END) AS safety_class_all_null_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played IS NULL THEN 1 ELSE 0 END) AS safety_class_all_null_free
+	-----------BASE
+	-----------Middle of Field Open and Base safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'OPEN' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_open_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'OPEN' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_open_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'OPEN' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_open_free
+	-----------Middle of Field Closed and Base safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_closed_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_closed_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_closed_free
+	-----------Middle of Field NULL and Base safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played IS NULL AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_null_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played IS NULL AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_null_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played IS NULL AND base_or_sub = 'BASE' THEN 1 ELSE 0 END) AS safety_class_base_null_free
+	-----------SUB
+	-----------Middle of Field Open and Sub safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'OPEN' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_open_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'OPEN' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_open_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'OPEN' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_open_free
+	-----------Middle of Field Closed and Sub safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_closed_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_closed_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played = 'CLOSED' AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_closed_free
+	-----------Middle of Field NULL and Sub safety play counts
+		,SUM(CASE WHEN pos.position_blt IN ('RUSH','SAM','OB34','MIKE','WILL','IB','SS') AND middle_of_field_played IS NULL AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_null_strong
+		,SUM(CASE WHEN pos.position_blt IN ('CB','NB')  AND middle_of_field_played IS NULL AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_null_nickel
+		,SUM(CASE WHEN pos.position_blt IN ('FS') AND middle_of_field_played IS NULL AND base_or_sub = 'SUB' THEN 1 ELSE 0 END) AS safety_class_sub_null_free
+	INTO #temp_safety_snap_counts_season
+	FROM [college_player_play_defense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	INNER JOIN [college_play_defense_alignment_facts] pd
+		ON pos.pff_play_id = pd.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0	
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(12)(b)
+
+	The next step is to assign a safety position based on the ratio of each type of safety snaps a player has.
+
+	OUTPUT TABLES:
+	#temp_seasons_safety_type
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_seasons_safety_type exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_seasons_safety_type') IS NOT NULL
+		DROP TABLE #temp_seasons_safety_type
+
+	SELECT gsis_player_id
+		  --,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+	      ,season
+	      ,season_type_adjusted
+----------Safety Type All Snaps
+		   --If Null Snaps Account for Less Than 51% of his snaps, then use the logic based on open and closed middle of the Field
+		  ,CASE WHEN (CAST(safety_class_all_null_strong AS NUMERIC(6,2)) + CAST(safety_class_all_null_free AS NUMERIC(6,2)) + CAST(safety_class_all_null_nickel AS NUMERIC(6,2))) / NULLIF((CAST(safety_class_all_null_strong AS NUMERIC(6,2)) + CAST(safety_class_all_null_free AS NUMERIC(6,2)) + CAST(safety_class_all_null_nickel AS NUMERIC(6,2))) + (CAST(safety_class_all_closed_strong AS NUMERIC(6,2))+ CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))) + (CAST(safety_class_all_open_strong AS NUMERIC(6,2)) + CAST(safety_class_all_open_free AS NUMERIC(6,2)) + CAST(safety_class_all_open_nickel AS NUMERIC(6,2))),0) < 0.51 THEN
+					CASE WHEN CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'SS'
+						 WHEN CAST(safety_class_all_closed_free AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'FS'
+						 WHEN (CAST(safety_class_all_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))),0) >= 0.30 
+								AND (safety_class_all_closed_strong + safety_class_all_closed_free + safety_class_all_closed_nickel) > (safety_class_all_open_strong + safety_class_all_open_free + safety_class_all_open_nickel) / 5)
+							  OR (CAST(safety_class_all_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_open_strong AS NUMERIC(6,2)) + CAST(safety_class_all_open_free AS NUMERIC(6,2)) + CAST(safety_class_all_open_nickel AS NUMERIC(6,2))),0) >= 0.30 
+							      AND (safety_class_all_open_strong + safety_class_all_open_free + safety_class_all_open_nickel) > (safety_class_all_closed_strong + safety_class_all_closed_free + safety_class_all_closed_nickel) / 5)
+							  OR (CAST(safety_class_all_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))),0) >= 0.25
+							      AND CAST(safety_class_all_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_open_strong AS NUMERIC(6,2)) + CAST(safety_class_all_open_free AS NUMERIC(6,2)) + CAST(safety_class_all_open_nickel AS NUMERIC(6,2))),0) >= 0.25)
+						  THEN 'NB'
+						 WHEN CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_all_closed_free AS NUMERIC(6,2)) + CAST(safety_class_all_closed_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are less than 51%	  
+				ELSE 
+					CASE WHEN CAST(safety_class_all_null_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_null_strong AS NUMERIC(6,2)) + CAST(safety_class_all_null_free AS NUMERIC(6,2)) + CAST(safety_class_all_null_nickel AS NUMERIC(6,2))),0) >= 0.30 
+					      THEN 'NB'
+						 WHEN CAST(safety_class_all_null_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_all_null_strong AS NUMERIC(6,2)) + CAST(safety_class_all_null_free AS NUMERIC(6,2)) + CAST(safety_class_all_null_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are more than 51%
+		   END AS safety_type_all --Ends safety type all snaps		
+
+----------Safety Type Base Snaps
+		   --If Null Snaps Account for Less Than 51% of his snaps, then use the logic based on open and closed middle of the Field
+		  ,CASE WHEN (CAST(safety_class_base_null_strong AS NUMERIC(6,2)) + CAST(safety_class_base_null_free AS NUMERIC(6,2)) + CAST(safety_class_base_null_nickel AS NUMERIC(6,2))) / NULLIF((CAST(safety_class_base_null_strong AS NUMERIC(6,2)) + CAST(safety_class_base_null_free AS NUMERIC(6,2)) + CAST(safety_class_base_null_nickel AS NUMERIC(6,2))) + (CAST(safety_class_base_closed_strong AS NUMERIC(6,2))+ CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))) + (CAST(safety_class_base_open_strong AS NUMERIC(6,2)) + CAST(safety_class_base_open_free AS NUMERIC(6,2)) + CAST(safety_class_base_open_nickel AS NUMERIC(6,2))),0) < 0.51 THEN
+					CASE WHEN CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'SS'
+						 WHEN CAST(safety_class_base_closed_free AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'FS'
+						 WHEN (CAST(safety_class_base_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))),0) >= 0.30 
+								AND (safety_class_base_closed_strong + safety_class_base_closed_free + safety_class_base_closed_nickel) > (safety_class_base_open_strong + safety_class_base_open_free + safety_class_base_open_nickel) / 5)
+							  OR (CAST(safety_class_base_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_open_strong AS NUMERIC(6,2)) + CAST(safety_class_base_open_free AS NUMERIC(6,2)) + CAST(safety_class_base_open_nickel AS NUMERIC(6,2))),0) >= 0.30 
+							      AND (safety_class_base_open_strong + safety_class_base_open_free + safety_class_base_open_nickel) > (safety_class_base_closed_strong + safety_class_base_closed_free + safety_class_base_closed_nickel) / 5)
+							  OR (CAST(safety_class_base_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))),0) >= 0.25
+							      AND CAST(safety_class_base_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_open_strong AS NUMERIC(6,2)) + CAST(safety_class_base_open_free AS NUMERIC(6,2)) + CAST(safety_class_base_open_nickel AS NUMERIC(6,2))),0) >= 0.25)
+						  THEN 'NB'
+						 WHEN CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_base_closed_free AS NUMERIC(6,2)) + CAST(safety_class_base_closed_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are less than 51%	  
+				ELSE 
+					CASE WHEN CAST(safety_class_base_null_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_null_strong AS NUMERIC(6,2)) + CAST(safety_class_base_null_free AS NUMERIC(6,2)) + CAST(safety_class_base_null_nickel AS NUMERIC(6,2))),0) >= 0.30 
+					      THEN 'NB'
+						 WHEN CAST(safety_class_base_null_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_base_null_strong AS NUMERIC(6,2)) + CAST(safety_class_base_null_free AS NUMERIC(6,2)) + CAST(safety_class_base_null_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are more than 51%
+		   END AS safety_type_base --Ends safety type base snaps
+
+----------Safety Type Sub Snaps
+		   --If Null Snaps Account for Less Than 51% of his snaps, then use the logic based on open and closed middle of the Field
+		  ,CASE WHEN (CAST(safety_class_sub_null_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_null_free AS NUMERIC(6,2)) + CAST(safety_class_sub_null_nickel AS NUMERIC(6,2))) / NULLIF((CAST(safety_class_sub_null_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_null_free AS NUMERIC(6,2)) + CAST(safety_class_sub_null_nickel AS NUMERIC(6,2))) + (CAST(safety_class_sub_closed_strong AS NUMERIC(6,2))+ CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))) + (CAST(safety_class_sub_open_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_open_free AS NUMERIC(6,2)) + CAST(safety_class_sub_open_nickel AS NUMERIC(6,2))),0) < 0.51 THEN
+					CASE WHEN CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'SS'
+						 WHEN CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))),0) >= 0.85
+						  THEN 'FS'
+						 WHEN (CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))),0) >= 0.30 
+								AND (safety_class_sub_closed_strong + safety_class_sub_closed_free + safety_class_sub_closed_nickel) > (safety_class_sub_open_strong + safety_class_sub_open_free + safety_class_sub_open_nickel) / 5)
+							  OR (CAST(safety_class_sub_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_open_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_open_free AS NUMERIC(6,2)) + CAST(safety_class_sub_open_nickel AS NUMERIC(6,2))),0) >= 0.30 
+							      AND (safety_class_sub_open_strong + safety_class_sub_open_free + safety_class_sub_open_nickel) > (safety_class_sub_closed_strong + safety_class_sub_closed_free + safety_class_sub_closed_nickel) / 5)
+							  OR (CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))),0) >= 0.25
+							      AND CAST(safety_class_sub_open_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_open_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_open_free AS NUMERIC(6,2)) + CAST(safety_class_sub_open_nickel AS NUMERIC(6,2))),0) >= 0.25)
+						  THEN 'NB'
+						 WHEN CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_closed_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_free AS NUMERIC(6,2)) + CAST(safety_class_sub_closed_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are less than 51%	  
+				ELSE 
+					CASE WHEN CAST(safety_class_sub_null_nickel AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_null_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_null_free AS NUMERIC(6,2)) + CAST(safety_class_sub_null_nickel AS NUMERIC(6,2))),0) >= 0.30
+					      THEN 'NB'
+						 WHEN CAST(safety_class_sub_null_strong AS NUMERIC(6,2)) / NULLIF((CAST(safety_class_sub_null_strong AS NUMERIC(6,2)) + CAST(safety_class_sub_null_free AS NUMERIC(6,2)) + CAST(safety_class_sub_null_nickel AS NUMERIC(6,2))),0) >= 0.60
+						  THEN 'SS'
+						 ELSE 'FS'
+					END --Ends section where Null Snaps are more than 51%
+		   END AS safety_type_sub --Ends safety type sub snaps					 
+	  INTO #temp_seasons_safety_type
+	  FROM #temp_safety_snap_counts_season
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(13)
+	
+	OFFENSE Positions
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(13)(a)
+	
+	First find a season position for every offensive player.
+
+	Sum up snaps by position for each player.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_off
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_off') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_off
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+		,SUM(CASE WHEN position_blt = 'QB' THEN 1 ELSE 0 END) AS [QB]
+		,SUM(CASE WHEN position_blt = 'RB' THEN 1 ELSE 0 END) AS [RB]
+		,SUM(CASE WHEN position_blt = 'FB' THEN 1 ELSE 0 END) AS [FB]
+		,SUM(CASE WHEN position_blt = 'LT' THEN 1 ELSE 0 END) AS [LOT]
+		,SUM(CASE WHEN position_blt = 'LG' THEN 1 ELSE 0 END) AS [LOG]
+		,SUM(CASE WHEN position_blt = 'OC' THEN 1 ELSE 0 END) AS [OC]
+		,SUM(CASE WHEN position_blt = 'RG' THEN 1 ELSE 0 END) AS [ROG]
+		,SUM(CASE WHEN position_blt = 'RT' THEN 1 ELSE 0 END) AS [ROT]
+		,SUM(CASE WHEN position_blt = 'TE' THEN 1 ELSE 0 END) AS [TE]
+		,SUM(CASE WHEN position_blt = 'WR' THEN 1 ELSE 0 END) AS [WR]
+	INTO #temp_position_snap_counts_season_off
+	FROM [college_player_play_offense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
+	WHERE an.season >= @iSeason
+		AND is_no_play = 0 
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0
+	GROUP BY gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,an.season
+		,an.season_type_adjusted
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(13)(b)
+
+	Unpivot the snaps table so you have a different row for each position a player has snaps at.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_unpivot_off
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_unpivot_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_unpivot_off') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_unpivot_off
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_counts.position_blt
+		,position_counts.snap_count
+	INTO #temp_position_snap_counts_season_unpivot_off
+	FROM #temp_position_snap_counts_season_off
+	UNPIVOT (snap_count FOR position_blt IN (QB,RB,FB,LOT,[LOG],OC,ROG,ROT,TE,WR)) AS position_counts
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(13)(c)
+
+	Rank the snap counts - the highest one is the player's season position.
+
+	OUTPUT TABLES:
+	#temp_position_snap_counts_season_rank_off
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_position_snap_counts_season_rank_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_position_snap_counts_season_rank_off') IS NOT NULL
+		DROP TABLE #temp_position_snap_counts_season_rank_off
+
+	SELECT gsis_player_id
+		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+		,season
+		,season_type_adjusted
+		,position_blt
+		--,snap_count
+		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, position_blt) AS snap_count_order
+	INTO #temp_position_snap_counts_season_rank_off
+	FROM #temp_position_snap_counts_season_unpivot_off
+	WHERE snap_count > 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	
+	(13)(d)
 
 	Create the final Player Season position table.
 
@@ -182,47 +1682,46 @@ BEGIN
 		,[TE] AS snap_count_te
 		,[WR] AS snap_count_wr
 	INTO #temp_seasons_position_off
-	FROM #temp_position_snap_counts_season_rank_all a
-	INNER JOIN #temp_position_snap_counts_season_all ca
+	FROM #temp_position_snap_counts_season_rank_off a
+	INNER JOIN #temp_position_snap_counts_season_off ca
 		ON a.gsis_player_id = ca.gsis_player_id
 		AND a.season = ca.season
 		AND a.season_type_adjusted = ca.season_type_adjusted
-	WHERE snap_count_order=1
+	WHERE snap_count_order = 1
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 	
 	
-	(2)
+	(14)(a)
 	
 	Now find a season receiver type for every offensive player.
 
 	Sum up snaps by receiver type for each player.
 
 	OUTPUT TABLES:
-	#temp_type_snap_counts_season_all
+	#temp_type_snap_counts_season_off
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if #temp_type_snap_counts_season_all exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_all') IS NOT NULL
-		DROP TABLE #temp_type_snap_counts_season_all
+	-- Check if #temp_type_snap_counts_season_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_off') IS NOT NULL
+		DROP TABLE #temp_type_snap_counts_season_off
 
 	SELECT gsis_player_id
 		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
 		,an.season
 		,an.season_type_adjusted
-		----------Overall Type Counts
 		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(receiver_type))) = 'FLEX' THEN 1 ELSE 0 END) AS [type_flex]
 		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(receiver_type))) = 'INSIDE' THEN 1 ELSE 0 END) AS [type_inside]
 		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(receiver_type))) = 'SLOT' THEN 1 ELSE 0 END) AS [type_slot]
 		,SUM(CASE WHEN LTRIM(RTRIM(UPPER(receiver_type))) = 'WIDE' THEN 1 ELSE 0 END) AS [type_wide]
-	INTO #temp_type_snap_counts_season_all
-	FROM [stage_plays_player_offensive_alignment_college] pos
-	INNER JOIN [stage_plays_play_type_college] pt
-		ON pos.pff_play_id=pt.pff_play_id
-	INNER JOIN [stage_plays_play_ancillary_college] an
-		ON pos.pff_play_id=an.pff_play_id
+	INTO #temp_type_snap_counts_season_off
+	FROM [college_player_play_offense_alignment_facts] pos
+	INNER JOIN [college_play_type_facts] pt
+		ON pos.pff_play_id = pt.pff_play_id
+	INNER JOIN [college_play_ancillary_facts] an
+		ON pos.pff_play_id = an.pff_play_id
 	WHERE an.season >= @iSeason
 		AND is_no_play = 0 
 		AND is_qb_kneel = 0
@@ -235,16 +1734,19 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
+	(14)(b)
+
 	Unpivot the types table so you have a different row for each receiver type a player has snaps at.
 
 	OUTPUT TABLES:
-	#temp_type_snap_counts_season_unpivot_all
+	#temp_type_snap_counts_season_unpivot_off
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if #temp_type_snap_counts_season_unpivot_all exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_unpivot_all') IS NOT NULL
-		DROP TABLE #temp_type_snap_counts_season_unpivot_all
+	-- Check if #temp_type_snap_counts_season_unpivot_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_unpivot_off') IS NOT NULL
+		DROP TABLE #temp_type_snap_counts_season_unpivot_off
 
 	SELECT gsis_player_id
 		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
@@ -252,23 +1754,26 @@ BEGIN
 		,season_type_adjusted
 		,position_counts.receiver_type
 		,position_counts.snap_count
-	INTO #temp_type_snap_counts_season_unpivot_all
-	FROM #temp_type_snap_counts_season_all
+	INTO #temp_type_snap_counts_season_unpivot_off
+	FROM #temp_type_snap_counts_season_off
 	UNPIVOT (snap_count FOR receiver_type IN (type_flex,type_inside,type_slot,type_wide)) AS position_counts
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
+	(14)(c)
+	
 	Rank the snap counts - the highest one is the player's season receiver type.
 
 	OUTPUT TABLES:
-	#temp_type_snap_counts_season_rank_all
+	#temp_type_snap_counts_season_rank_off
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if #temp_type_snap_counts_season_rank_all exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_rank_all') IS NOT NULL
-		DROP TABLE #temp_type_snap_counts_season_rank_all
+	-- Check if #temp_type_snap_counts_season_rank_off exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_type_snap_counts_season_rank_off') IS NOT NULL
+		DROP TABLE #temp_type_snap_counts_season_rank_off
 
 	SELECT gsis_player_id
 		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
@@ -277,12 +1782,15 @@ BEGIN
 		,receiver_type
 		--,snap_count
 		,RANK() OVER (PARTITION BY gsis_player_id, season, season_type_adjusted ORDER BY snap_count DESC, receiver_type) AS snap_count_order
-	INTO #temp_type_snap_counts_season_rank_all
-	FROM #temp_type_snap_counts_season_unpivot_all
+	INTO #temp_type_snap_counts_season_rank_off
+	FROM #temp_type_snap_counts_season_unpivot_off
 	WHERE snap_count > 0
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(14)(d)
 
 	Create the final Player Season role table
 
@@ -309,51 +1817,159 @@ BEGIN
 		,[type_slot] AS snap_count_slot
 		,[type_wide] AS snap_count_wide
 	INTO #temp_seasons_receiver_type
-	FROM #temp_type_snap_counts_season_rank_all ra
-	INNER JOIN #temp_type_snap_counts_season_all cb
+	FROM #temp_type_snap_counts_season_rank_off ra
+	INNER JOIN #temp_type_snap_counts_season_off cb
 		ON ra.gsis_player_id = cb.gsis_player_id
 		AND ra.season = cb.season
 		AND ra.season_type_adjusted = cb.season_type_adjusted
-	WHERE snap_count_order=1
+	WHERE snap_count_order = 1
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
-	(3)
+	(15)
 
-	Combine position and receiver type into one table.
+	Write the defense and offense positions into the season positions table.
 
-	ANALYSIS TABLES:
-		analysis_players_season_position_offense
+	DEFENSE - Combine position, role, and safety position into one table.
+
+	OFFENSE - Combine position and receiver type into one table.
+
+	PERMANENT TABLES:
+		college_player_season_positions
 		
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Clear data from the analysis_players_season_position_offense table 
-	DELETE FROM analysis_players_season_position_offense_college
+	-- Clear data from the college_player_season_positions table 
+	DELETE FROM college_player_season_positions
 	WHERE season >= @iSeason
 
-	INSERT INTO analysis_players_season_position_offense_college
+----DEFENSE
+	INSERT INTO college_player_season_positions
+		([gsis_player_id]
+		,[season]
+		,[season_type_adjusted]
+		,[defense_type]
+		,[position_blt]
+		,[position_role]
+		,[role_pff]
+		,[snap_count_all]
+		,[snap_count_nt]
+		,[snap_count_dt3t]
+		,[snap_count_de5t]
+		,[snap_count_de43]
+		,[snap_count_rush]
+		,[snap_count_sam]
+		,[snap_count_ob34]
+		,[snap_count_mike]
+		,[snap_count_will]
+		,[snap_count_ib]
+		,[snap_count_cb]
+		,[snap_count_nb]
+		,[snap_count_fs]
+		,[snap_count_ss]
+		,[snap_count_ds]
+		,[snap_count_coverage]
+		,[snap_count_pass_rush]
+		)
+	SELECT po.gsis_player_id
+		   --,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
+	      ,po.season
+	      ,po.season_type_adjusted
+		  ,po.defense_type
+		  ,CASE WHEN position_blt = 'DS' OR (position_blt IN ('IB','OB34','RUSH','SAM') AND pp.translation = 'DS') THEN 
+					CASE WHEN po.defense_type = 'ALL' THEN safety_type_all
+						 WHEN po.defense_type = 'BASE' THEN safety_type_base
+						 WHEN po.defense_type = 'SUB' THEN safety_type_sub
+						 WHEN po.defense_type IN ('PASS','RUN') THEN CASE when pp.translation = 'DS' THEN 'DS' ELSE position_blt END
+					END
+				WHEN position_blt = 'IB' THEN
+					CASE WHEN (snap_count_mike / NULLIF(snap_count_will,0)) BETWEEN 0.95 AND 1.05 THEN CASE WHEN pp.translation IN ('MIKE','WILL') THEN pp.translation ELSE 'WILL' END
+						 WHEN snap_count_mike >= snap_count_will THEN 'MIKE' 
+						 WHEN snap_count_will > snap_count_mike THEN 'WILL' 
+						 ELSE 'IB'
+					END
+				WHEN position_blt = 'OB34' OR position_blt = 'DE43' THEN
+					CASE WHEN snap_count_de43 > snap_count_rush AND snap_count_de43 > snap_count_sam THEN 'DE43' 
+						 WHEN (snap_count_rush / NULLIF(snap_count_sam,0)) BETWEEN 0.95 AND 1.05 THEN CASE WHEN pp.translation IN ('RUSH','SAM') THEN pp.translation ELSE 'RUSH' END
+						 WHEN snap_count_rush > snap_count_de43 AND snap_count_rush > snap_count_sam  THEN 'RUSH'
+						 WHEN snap_count_sam > snap_count_de43 AND snap_count_sam > snap_count_rush THEN 'SAM'
+						 ELSE 'DE43'
+					END
+				WHEN position_blt IN ('DT3T','DE5T','NT') THEN
+					CASE WHEN snap_count_de43 + snap_count_ob34 > snap_count_dt3t + snap_count_de5t + snap_count_nt THEN
+							CASE WHEN (snap_count_de43 / NULLIF(snap_count_ob34,0)) BETWEEN 0.95 AND 1.05 THEN CASE WHEN pp.translation IN ('DE43','RUSH','SAM') THEN pp.translation ELSE 'RUSH' END
+								WHEN snap_count_rush > snap_count_de43 AND snap_count_rush > snap_count_sam  THEN 'RUSH'
+								WHEN snap_count_sam > snap_count_de43 AND snap_count_sam > snap_count_rush  THEN 'SAM'
+								ELSE 'DE43'
+							END
+						 ELSE position_blt
+					END
+				ELSE position_blt 
+		  END AS position_blt
+		  ,role_pff AS position_role
+		  ,role_pff
+		  ,(snap_count_nt+snap_count_dt3t+snap_count_de5t+snap_count_de43+snap_count_ob34+snap_count_ib+snap_count_cb+snap_count_nb+snap_count_ds) AS snap_count_all
+		  ,snap_count_nt
+		  ,snap_count_dt3t
+		  ,snap_count_de5t
+		  ,snap_count_de43
+		  ,snap_count_rush
+		  ,snap_count_sam	
+		  ,snap_count_ob34  	
+		  ,snap_count_mike
+		  ,snap_count_will
+		  ,snap_count_ib
+		  ,snap_count_cb
+		  ,snap_count_nb
+		  ,snap_count_fs
+		  ,snap_count_ss
+		  ,snap_count_ds	
+		  ,snap_count_coverage
+		  ,snap_count_pass_rush
+	FROM #temp_seasons_position po
+	LEFT JOIN #temp_seasons_role ro
+		ON po.gsis_player_id = ro.gsis_player_id
+		AND po.season = ro.season
+		AND po.season_type_adjusted = ro.season_type_adjusted
+		AND po.defense_type = ro.defense_type
+	LEFT JOIN #temp_seasons_safety_type st
+		ON po.gsis_player_id = st.gsis_player_id
+		AND po.season = st.season
+		AND po.season_type_adjusted = st.season_type_adjusted
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON po.gsis_player_id = pl.ncaa_gsis_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions pp
+		ON pl.position_id = pp.id
+	WHERE pp.team IN ('defense') 
+		AND po.season >= @iSeason
+
+
+----OFFENSE
+	INSERT INTO college_player_season_positions
 		([gsis_player_id]
 		,[season]
 		,[season_type_adjusted]
 		,[position_blt]
+		,[position_role]
+		,[receiver_type]
+		,[snap_count_all]
 		,[snap_count_qb]
 		,[snap_count_rb]
 		,[snap_count_fb]
+		,[snap_count_wr]
+		,[snap_count_te]
 		,[snap_count_lot]
 		,[snap_count_log]
 		,[snap_count_oc]
 		,[snap_count_rog]
 		,[snap_count_rot]
-		,[snap_count_te]
-		,[snap_count_wr]
-		,[receiver_type]
 		,[snap_count_flex]
 		,[snap_count_inside]
 		,[snap_count_slot]
-		,[snap_count_wide]
-		,[snap_count_all])
+		,[snap_count_wide])
 	SELECT po.gsis_player_id
 		--,team --not sure if we want to separate it out by team...if a guy plays different positions for different teams do we want to recognize that?
 		,po.season
@@ -361,16 +1977,13 @@ BEGIN
 		,CASE WHEN pp.translation = 'TE' AND position_blt = 'WR' THEN 'TE'
 			ELSE position_blt
 		END AS position_blt
-		,snap_count_qb
-		,snap_count_rb
-		,snap_count_fb
-		,snap_count_lot
-		,snap_count_log
-		,snap_count_oc	
-		,snap_count_rog	
-		,snap_count_rot
-		,snap_count_te	
-		,snap_count_wr
+		,CASE WHEN pp.translation = 'TE' AND position_blt = 'WR' THEN 
+				CASE WHEN snap_count_slot + snap_count_wide > snap_count_inside THEN 'SLOT'
+						WHEN snap_count_flex > snap_count_inside THEN 'FLEX'
+						ELSE receiver_type
+				END
+			ELSE receiver_type
+		END AS position_role
 		,CASE WHEN pp.translation = 'TE' AND position_blt = 'WR' THEN 
 				CASE WHEN snap_count_slot + snap_count_wide > snap_count_inside THEN 'SLOT'
 						WHEN snap_count_flex > snap_count_inside THEN 'FLEX'
@@ -378,11 +1991,21 @@ BEGIN
 				END
 			ELSE receiver_type
 		END AS receiver_type
+		,(snap_count_qb + snap_count_rb + snap_count_fb + snap_count_lot + snap_count_log + snap_count_oc + snap_count_rog + snap_count_rot + snap_count_te + snap_count_wr) AS snap_count_all
+		,snap_count_qb
+		,snap_count_rb
+		,snap_count_fb
+		,snap_count_wr
+		,snap_count_te
+		,snap_count_lot
+		,snap_count_log
+		,snap_count_oc
+		,snap_count_rog
+		,snap_count_rot
 		,snap_count_flex
 		,snap_count_inside
 		,snap_count_slot
 		,snap_count_wide
-		,(snap_count_qb + snap_count_rb + snap_count_fb + snap_count_lot + snap_count_log + snap_count_oc + snap_count_rog + snap_count_rot + snap_count_te + snap_count_wr) AS snap_count_all
 	FROM #temp_seasons_position_off po
 	LEFT JOIN #temp_seasons_receiver_type rt
 		ON po.gsis_player_id = rt.gsis_player_id
@@ -396,11 +2019,13 @@ BEGIN
 	WHERE pp.team IN ('offense') 
 		AND po.season >= @iSeason
 
+
 	PROC_END:
 
 	RETURN @oReturnCD  
 
 END
+
 
 
 
