@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_log_batch_run_step]    Script Date: 5/16/2022 11:05:35 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_log_batch_run_step_2021]    Script Date: 5/16/2022 11:04:55 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -10,7 +10,9 @@ GO
 
 
 
-ALTER proc [dbo].[sp_log_batch_run_step] (@iBatchKey INT, @iSeason INT, @iStepName NVARCHAR(200), @iOrder INT, @iStartEndFlag  SMALLINT = 0 , @iError NVARCHAR(max) = NULL)
+
+
+ALTER proc [dbo].[sp_log_batch_run_step_2021] (@iBatchKey INT, @iSeason INT, @iStepName NVARCHAR(200), @iOrder INT, @iStartEndFlag  SMALLINT = 0 , @iError NVARCHAR(max) = NULL)
 
 as
 
@@ -19,7 +21,7 @@ as
 
 Procedure Name:	[sp_log_batch_run_step]
 Author:			Jeremy Parks
-Creation Date:	9/1/2017
+Creation Date:	09/01/2017
 Description:       
 
 
@@ -49,7 +51,7 @@ set @vErrorFlag = 0
 if @iStartEndFlag = 0 begin  -- Start, just log the starting time and insert the record
 	
 	-- Insert Record
-	insert into [dbo].[log_batch_step]
+	insert into [dbo].[log_batch_step_2021]
            ([batch_key]
            ,[batch_step]
            ,[minimum_season]
@@ -70,7 +72,7 @@ if @iStartEndFlag = 1  begin
 		set @vErrorFlag = 1
 
 	-- Update the step with the time and error
-	update log_batch_step 
+	update log_batch_step_2021
 		set error_flag = @vErrorFlag, 
 		error_desc = @iError, 
 		end_time = getdate()
