@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_expected_yards_after_catch]    Script Date: 5/16/2022 3:33:40 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_play_expected_after_catch_yards]    Script Date: 5/16/2022 3:33:24 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -11,13 +11,15 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_r_advanced_stats_expected_yards_after_catch] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+ALTER procedure [dbo].[sp_r_pro_play_expected_after_catch_yards] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
 Procedure Name:	sp_r_advanced_stats_expected_yards_after_catch
 Author:			Jeremy Parks
-Creation Date:	6/28/2017
+Creation Date:	06/28/2017
 Description:       
 
 
@@ -50,7 +52,7 @@ Create the R select statement so you can pull only the seasons you want to run.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 DECLARE @vSQL NVARCHAR(250)
-SET @vSQL = 'SELECT * FROM dbo.r_input_expected_yards_after_catch WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+SET @vSQL = 'SELECT * FROM dbo.pro_play_expected_after_catch_yards_inputs WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -59,7 +61,7 @@ Remove all the tackle probabilities from the current season so you don't get dup
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-DELETE FROM r_output_expected_yards_after_catch
+DELETE FROM pro_play_expected_after_catch_yards
 WHERE season >= @iSeason
 
 
@@ -69,7 +71,7 @@ Submit the R job to R services.
 			    
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-insert into r_output_expected_yards_after_catch
+insert into pro_play_expected_after_catch_yards
 
 EXECUTE sp_execute_external_script 
 @language = N'R',
@@ -139,7 +141,7 @@ WITH RESULT SETS
 			))
 */
 
---r_output_expected_yards_after_catch
+--pro_play_expected_after_catch_yards
 
 
 END
