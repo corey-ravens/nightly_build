@@ -1,0 +1,242 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_stage_players_suspensions]    Script Date: 5/16/2022 3:18:21 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_stage_players_suspensions] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_stage_players_suspensions
+Author:			Corey Krawiec
+Creation Date:	7/18/2016
+Description:       
+
+
+	
+	This program is to create the Player Suspension table.  
+
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+BEGIN 
+
+	SET @oReturnCD  = 0
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	First create a table of just the suspensions and throw out all transactions
+	with "backwards" dates where ToDate is before TransactionDate.  Also exclude
+	all non NFL transactions.
+
+	TEMP TABLES:
+		##temp_suspensions_nfl
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_suspensions_nfl, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_suspensions_nfl') IS NOT NULL
+		DROP TABLE ##temp_suspensions_nfl
+
+	SELECT *
+	      ,CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(LEAD(TransactionDesc) OVER (PARTITION BY PlayerID ORDER BY Season, OrderBy))),' ',''))  IN
+		        ('EXEMPT/SUSPENDED'
+		  	       ,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
+				   ,'RESERVE/INDEFINITESUSPENSION'
+			       ,'RESERVE/SUSPENDEDBYCOMMISSIONER'
+				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
+			       ,'RESERVE/SUSPENDEDBYCLUB'
+				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				   ,'SUSPENDED'
+				   ,'SUSPENDEDBYCOMMISSIONER'
+				   ,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				   --,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
+				 ) 	  
+		   THEN 1 ELSE 0 END
+		  AS next_row_is_suspension
+	INTO ##temp_suspensions_nfl
+	FROM [ProDB].[dbo].[TransactionTable]
+	WHERE LeagueType = 'NFL'
+		AND (ToDate >= Transactiondate OR ToDate IS NULL)
+		AND UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN
+		     ('EXEMPT/SUSPENDED'
+		  	 ,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
+			 ,'RESERVE/INDEFINITESUSPENSION'
+			 ,'RESERVE/SUSPENDEDBYCOMMISSIONER'
+			 ,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
+			 ,'RESERVE/SUSPENDEDBYCLUB'
+			 ,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+			 ,'SUSPENDED'
+			 ,'SUSPENDEDBYCOMMISSIONER'
+			 ,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+			 --,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
+			 ,'NOTIFICATIONOFPENDINGSUSPENSION'
+			 ,'NOTIFICATIONOFSUSPENSION'
+		     )
+	ORDER BY PlayerID
+		,OrderBy
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Sum up the number of games missed due to suspension. These probably aren't 100% right because
+	if a player gets suspended and then never signs again (or doesn't have another transaction) with
+	a team, it just counts all those weeks as suspensions.  But for the purposes of determining 
+	suspension severity, it should be a good proxy.
+
+	OUTPUT TABLES:
+		##temp_suspensions_games
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_suspensions_games exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_suspensions_games') IS NOT NULL
+		DROP TABLE ##temp_suspensions_games
+
+		SELECT nfl_player_id
+			  ,SUM(CASE WHEN status_roster_simple = 'SUSPENDED' THEN 1 ELSE 0 END) AS suspensions_games
+		  INTO ##temp_suspensions_games
+		  FROM [Analytics].[dbo].[analysis_players_gameweek_status]
+	  GROUP BY nfl_player_id
+	  
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Sum the number of suspensions by player.  Pay attention to "Notification of"
+	so that if a player is notified AND suspended then you only count it as a
+	suspension and not a pending suspension as well.
+
+	OUTPUT TABLES:
+		##temp_players_suspensions
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_players_suspensions exists, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_players_suspensions') IS NOT NULL
+		DROP TABLE ##temp_players_suspensions
+
+	SELECT PlayerID AS nfl_player_id
+	      ,SUM(CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN 
+		           ('EXEMPT/SUSPENDED'
+		  	       ,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
+				   ,'RESERVE/INDEFINITESUSPENSION'
+			       ,'RESERVE/SUSPENDEDBYCOMMISSIONER'
+				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
+			       ,'RESERVE/SUSPENDEDBYCLUB'
+				   ,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				   ,'SUSPENDED'
+				   ,'SUSPENDEDBYCOMMISSIONER'
+				   ,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				   --,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
+				   ) 
+			   THEN 1 ELSE 0 END)
+		   AS suspensions_enforced
+	      ,SUM(CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN
+		           ('NOTIFICATIONOFPENDINGSUSPENSION'
+				   ,'NOTIFICATIONOFSUSPENSION'
+		           )
+				   AND next_row_is_suspension = 0
+			   THEN 1 ELSE 0 END)
+		   AS suspensions_pending
+	      ,SUM(CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN 
+		            ('EXEMPT/SUSPENDED'
+		  	        ,'PRACTICESQUAD;SUSPENDEDBYCOMMISSIONER'
+				    ,'RESERVE/INDEFINITESUSPENSION'
+			        ,'RESERVE/SUSPENDEDBYCOMMISSIONER'
+				    ,'RESERVE/SUSPENDEDBYCOMMISSIONER-LESSTHANONEYEAR'
+			        ,'RESERVE/SUSPENDEDBYCLUB'
+				    ,'RESERVE/SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				    ,'SUSPENDED'
+				    ,'SUSPENDEDBYCOMMISSIONER'
+				    ,'SUSPENDEDBYCOMMISSIONER-ATLEASTONEYEAR'
+				    --,'SUSPENDEDBYLEAGUE' - this is for non NFL suspensions so don't include it
+					)
+					OR
+					(UPPER(REPLACE(LTRIM(RTRIM(TransactionDesc)),' ','')) IN
+		             ('NOTIFICATIONOFPENDINGSUSPENSION'
+				     ,'NOTIFICATIONOFSUSPENSION'
+		             )
+				    AND next_row_is_suspension = 0
+				    )
+				   THEN 1 ELSE 0 END)
+		   AS suspensions_total	 
+	INTO ##temp_players_suspensions
+	FROM ##temp_suspensions_nfl su
+	GROUP BY PlayerID
+	
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Join the summed suspensions and the summed games missed because of suspension tables
+
+	STAGING TABLES:
+		stage_players_suspensions
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE stage_players_suspensions
+
+	INSERT INTO stage_players_suspensions 
+		([nfl_player_id],
+		[suspensions_enforced],
+		[suspensions_pending],
+		[suspensions_total],
+		[suspensions_games])
+	SELECT su.*
+		  ,suspensions_games
+	FROM ##temp_players_suspensions su
+	LEFT JOIN ##temp_suspensions_games ga
+		ON su.nfl_player_id = ga.nfl_player_id
+
+	ALTER INDEX ix_stage_players_suspensions_nfl_player_id ON stage_players_suspensions REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	   
+	IF @@ERROR <> 0 BEGIN 
+		SET @oReturnCD = 1
+		GOTO PROC_END
+	END 
+
+	PROC_END:
+
+	RETURN @oReturnCD  
+
+
+END 
+
+
+
+
+
+
+
+
+GO
+
+
