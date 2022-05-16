@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_stage_players_game_injuries]    Script Date: 5/16/2022 1:58:13 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_pro_player_gameweek_injuries]    Script Date: 5/16/2022 1:57:46 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -14,13 +14,18 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_stage_players_game_injuries] (@oReturnCD INT OUTPUT) as
+
+
+
+
+
+ALTER procedure [dbo].[sp_pro_player_gameweek_injuries] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_stage_players_game_injuries
+Procedure Name:	sp_pro_gameweek_injuries
 Author:			Corey Krawiec
-Creation Date:	7/18/2016
+Creation Date:	07/18/2016
 Description:       
 
 
@@ -28,6 +33,14 @@ Description:
 	table that has one row per player per game that contains his injury information for
 	that entire week.  His practice 1, 2, and 3 along with his game status.
 
+Steps:
+	(1) Clean up variables
+	(2) Combine columns
+	(3) Injury dummy variables
+	(4) Pivot injury status
+	(5) Pivot injury text
+	(6) Sum up the dummy variables
+	(7) Write to pro_gameweek_injuries
 	
 			
 Input Parameters:
@@ -52,16 +65,19 @@ BEGIN
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
+	(1)
+	
 	First clean up some fields and combine injury1 and injuryDesc1 into one column (do same with injury2)
 
 	TEMP TABLES:
-		##temp_player_injuries_clean
+		#temp_player_injuries_clean
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_clean exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_clean') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_clean
+	-- Check if #temp_player_injuries_clean exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_clean') IS NOT NULL
+		DROP TABLE #temp_player_injuries_clean
 
 	SELECT PlayerID AS nfl_player_id
           ,Gamekey AS nfl_game_key
@@ -103,23 +119,25 @@ BEGIN
 				ELSE REPLACE(CONCAT(LTRIM(RTRIM(Injury2)),'(',LTRIM(RTRIM(InjuryDesc2)),')'),'()','')
 		   END AS injury_2
 		   ,LEAD(ReportDay) OVER (PARTITION BY PlayerID, GameKey ORDER BY ReportDay, ReportType DESC) AS next_report_day
-	INTO ##temp_player_injuries_clean
+	INTO #temp_player_injuries_clean
 	FROM [ClubDB].[dbo].[PlayerInjury]
 
-   --select * from [ClubDB].[dbo].[PlayerInjury] where season=2016
-
+   
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(2)
 
 	Combine the injury1 and injury2 columns into one column.
 
 	TEMP TABLES:
-		##temp_player_injuries_text_combine
+		#temp_player_injuries_text_combine
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_text_combine exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_text_combine') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_text_combine
+	-- Check if #temp_player_injuries_text_combine exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_text_combine') IS NOT NULL
+		DROP TABLE #temp_player_injuries_text_combine
 
 	SELECT nfl_player_id
           ,nfl_game_key
@@ -132,25 +150,27 @@ BEGIN
 				WHEN injury_1 <> '' AND injury_2 <> '' THEN CONCAT(injury_1,' / ',injury_2) 
 				ELSE NULL
 				END AS injury_text
-	INTO ##temp_player_injuries_text_combine
-	FROM ##temp_player_injuries_clean
+	INTO #temp_player_injuries_text_combine
+	FROM #temp_player_injuries_clean
 	WHERE next_report_day IS NULL 
 		OR next_report_day <> 4
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(3)
 
 	Create the injury dummy variables
 
 	TEMP TABLES:
-		##temp_player_injuries_dummies
+		#temp_player_injuries_dummies
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_dummies exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_dummies') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_dummies
+	-- Check if #temp_player_injuries_dummies exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_dummies') IS NOT NULL
+		DROP TABLE #temp_player_injuries_dummies
 
 	SELECT nfl_player_id
           ,nfl_game_key
@@ -344,15 +364,17 @@ BEGIN
 				ELSE 0
 		   END AS injury_type_other
 		  ,RANK() OVER (PARTITION BY nfl_player_id, nfl_game_key, report_type ORDER BY injury_text) AS injury_order
-	INTO ##temp_player_injuries_dummies
-	FROM ##temp_player_injuries_text_combine
+	INTO #temp_player_injuries_dummies
+	FROM #temp_player_injuries_text_combine
 	ORDER BY nfl_player_id
 		,nfl_game_key
 		,report_type
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(4)
 
 	To get everything in one row, you need injury status, injury text, and the dummies
 	all pivoted by player game.  Break it out into 3 separate steps so it is easier to
@@ -361,13 +383,13 @@ BEGIN
 	First pivot injury status.
 
 	TEMP TABLES:
-		##temp_player_injuries_status_pivot
+		#temp_player_injuries_status_pivot
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_status_pivot exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_status_pivot') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_status_pivot
+	-- Check if #temp_player_injuries_status_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_status_pivot') IS NOT NULL
+		DROP TABLE #temp_player_injuries_status_pivot
 
 	SELECT nfl_player_id
           ,nfl_game_key
@@ -383,22 +405,24 @@ BEGIN
 	      ,[PRACTICE 3] AS injury_status_practice_3
 	      ,[PRACTICE 2] AS injury_status_practice_2
 		  ,[PRACTICE 1] AS injury_status_practice_1
-	INTO ##temp_player_injuries_status_pivot
+	INTO #temp_player_injuries_status_pivot
 	FROM (
 		SELECT nfl_player_id
           ,nfl_game_key
 		  ,report_type
           ,injury_status
 		  ,injury_order
-		FROM ##temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
+		FROM #temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
 	PIVOT (MAX(injury_status) FOR report_type IN ([GAME], [PRACTICE 3], [PRACTICE 2], [PRACTICE 1])) AS pvt
 	WHERE injury_order = 1
 	ORDER BY nfl_player_id
 		,nfl_game_key
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(5)
 
 	Second pivot injury text
 
@@ -407,9 +431,9 @@ BEGIN
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_text_pivot exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_text_pivot') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_text_pivot
+	-- Check if #temp_player_injuries_text_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_text_pivot') IS NOT NULL
+		DROP TABLE #temp_player_injuries_text_pivot
 
 	SELECT nfl_player_id
            ,nfl_game_key
@@ -425,22 +449,24 @@ BEGIN
 	      ,[PRACTICE 3] AS injury_text_practice_3
 	      ,[PRACTICE 2] AS injury_text_practice_2
 		  ,[PRACTICE 1] AS injury_text_practice_1
-	INTO ##temp_player_injuries_text_pivot
+	INTO #temp_player_injuries_text_pivot
 	FROM (
 		SELECT nfl_player_id
           ,nfl_game_key
 		  ,report_type
           ,injury_text
 		  ,injury_order
-		FROM ##temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
+		FROM #temp_player_injuries_dummies WHERE report_type IN ('GAME', 'PRACTICE 3', 'PRACTICE 2', 'PRACTICE 1')) up
 	PIVOT (MAX(injury_text) FOR report_type IN ([GAME], [PRACTICE 3], [PRACTICE 2], [PRACTICE 1])) AS pvt
 	WHERE injury_order = 1
 	ORDER BY nfl_player_id
 		,nfl_game_key
 
 
-
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+	(6)
 
 	For the dummies, you don't need to pivot, just take the MAX for each player game -
 	that way if he has a 1 in any field, it will get counted for the week, if he has
@@ -449,13 +475,13 @@ BEGIN
 	with other variables.
 
 	TEMP TABLES:
-		##temp_player_injuries_dummy_pivot
+		#temp_player_injuries_dummy_pivot
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if ##temp_player_injuries_dummy_pivot exists, if it does drop it
-	IF OBJECT_ID('tempdb..##temp_player_injuries_dummy_pivot') IS NOT NULL
-		DROP TABLE ##temp_player_injuries_dummy_pivot
+	-- Check if #temp_player_injuries_dummy_pivot exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_injuries_dummy_pivot') IS NOT NULL
+		DROP TABLE #temp_player_injuries_dummy_pivot
 
 	SELECT nfl_player_id
           ,nfl_game_key
@@ -470,14 +496,13 @@ BEGIN
 		  ,MAX(injury_type_neck_shoulders) AS injury_type_neck_shoulders
 		  ,MAX(injury_type_head_non_concussion) AS injury_type_head_non_concussion
 		  ,MAX(injury_type_concussion) AS injury_type_concussion
-	INTO ##temp_player_injuries_dummy_pivot
-	FROM ##temp_player_injuries_dummies 
+	INTO #temp_player_injuries_dummy_pivot
+	FROM #temp_player_injuries_dummies 
 	WHERE injury_order = 1
 	GROUP BY nfl_player_id
 		,nfl_game_key
 	ORDER BY nfl_player_id
 		,nfl_game_key
-
 
 
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -486,14 +511,14 @@ BEGIN
 	one row for every player for every game that lists his injury data
 	for the whole week in the same row.
 
-	STAGING TABLES:
-		stage_players_game_injuries
+	OUTPUT TABLES:
+		pro_gameweek_injuries
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE stage_players_game_injuries
+	TRUNCATE TABLE pro_player_gameweek_injuries
 
-    INSERT INTO stage_players_game_injuries
+    INSERT INTO pro_player_gameweek_injuries
 		([nfl_player_id],
 		[nfl_game_key],
 		[injury_status_week],
@@ -545,15 +570,18 @@ BEGIN
 		  ,injury_type_neck_shoulders
 		  ,injury_type_head_non_concussion
 		  ,injury_type_concussion
-	FROM ##temp_player_injuries_status_pivot st
-	LEFT JOIN ##temp_player_injuries_text_pivot te
+	FROM #temp_player_injuries_status_pivot st
+	LEFT JOIN #temp_player_injuries_text_pivot te
 		ON st.nfl_player_id = te.nfl_player_id
 		AND st.nfl_game_key = te.nfl_game_key
-	LEFT JOIN ##temp_player_injuries_dummy_pivot du
+	LEFT JOIN #temp_player_injuries_dummy_pivot du
 		ON st.nfl_player_id = du.nfl_player_id
 		AND st.nfl_game_key = du.nfl_game_key
   
-	ALTER INDEX ix_stage_players_game_injury_nfl_player_id ON stage_players_game_injuries REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	ALTER INDEX ALL ON pro_player_gameweek_injuries REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
+	
+	
+	
 	   
 	IF @@ERROR <> 0 BEGIN 
 		SET @oReturnCD = 1
