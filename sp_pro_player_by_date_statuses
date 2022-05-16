@@ -1,0 +1,266 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_stage_players_roster_status_by_date]    Script Date: 5/16/2022 1:54:21 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+ALTER procedure [dbo].[sp_stage_players_roster_status_by_date] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_stage_players_roster_status_by_date
+Author:			Corey Krawiec
+Creation Date:	7/25/2016
+Description:       
+
+
+	This program is to create the Player Status By Date Table.  
+
+	There is another program that creates the Player Status by Game Week Table.
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+
+BEGIN 
+
+	SET @oReturnCD  = 0
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	First create a table of all NFL player transactions.  For the transactions with "backwards" dates 
+	(where the "ToDate" is before the "TransactionDate"), change the ToDate (status_end_date) to the
+	Transaction date (status_start_date).  Add in the variable that identifies which rows to throw
+	out.  Also join in the club IDs and roster status codes.
+
+	Exclude any rows with a TransStatus of 50, because that means the transaction was nullified.
+
+	TEMP TABLES:
+		##temp_player_transactions_nfl
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_player_transactions_nfl, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_player_transactions_nfl') IS NOT NULL
+		DROP TABLE ##temp_player_transactions_nfl
+
+	SELECT PlayerID AS nfl_player_id
+	      ,TransID AS nfl_transaction_id 
+		  ,tr.Season AS season
+		  ,Transactiondate AS transaction_start_date
+		  ,CASE WHEN ToDate < Transactiondate THEN Transactiondate ELSE ToDate END AS transaction_end_date
+		  ,TransactionDesc AS transaction_description
+          ,InitialTransStatusDesc AS transaction_status_start_description
+          ,ResultTransStatusDesc AS transaction_status_result_description
+		  ,ResultTransStatusDescAbbr AS transaction_status_result_abbreviation
+		  ,status_game_priority AS status_priority --priority numbers held over from Sandy's SAS code
+		  ,status_roster_simple
+		  ,cs.ClubID AS nfl_club_id_start
+		  ,cr.ClubID AS nfl_club_id_result
+		  ,cp.ClubID AS nfl_club_id_potential
+          ,StartClubAbbr AS club_code_start
+          ,ResultClubAbbr AS club_code_result
+          ,PotentialClubAbbr AS club_code_potential
+          ,PcmsContractID AS contract_id_pcms
+          ,Comments1 AS comments_1
+          ,Comments2 AS comments_2
+          ,OrderBy	AS order_by	
+	      ,CASE WHEN RANK() OVER (PARTITION BY PlayerID ORDER BY tr.Season, OrderBy) = 1 --it is the first row for a player
+			      OR UPPER(REPLACE(LTRIM(RTRIM(LAG(ResultTransStatusDesc) OVER (PARTITION BY PlayerID ORDER BY tr.Season, OrderBy))),' ','')) <> UPPER(REPLACE(LTRIM(RTRIM(ResultTransStatusDesc)),' ','')) --the result transaction is different from the previous row
+		          OR UPPER(LTRIM(RTRIM(LAG(ResultClubAbbr) OVER (PARTITION BY PlayerID ORDER BY tr.Season, OrderBy)))) <> UPPER(LTRIM(RTRIM(ResultClubAbbr))) --the result club is different than the one in the previous row
+				  OR LEAD(PlayerId) OVER (ORDER BY PlayerID, tr.Season, OrderBy) <> PlayerId --it is the last transaction row for a player
+				THEN 1 
+				ELSE 0
+		   END AS row_to_keep	  
+	INTO ##temp_player_transactions_nfl
+	FROM [ProDB].[dbo].[TransactionTable] tr
+	LEFT JOIN [ProDB].[dbo].[Club] cs
+		ON UPPER(LTRIM(RTRIM(tr.StartClubAbbr))) = UPPER(LTRIM(RTRIM(cs.Club_Code)))
+		AND tr.season = cs.Season
+	LEFT JOIN [ProDB].[dbo].[Club] cr
+		ON UPPER(LTRIM(RTRIM(tr.ResultClubAbbr))) = UPPER(LTRIM(RTRIM(cr.Club_Code)))
+		AND tr.season = cr.Season
+	LEFT JOIN [ProDB].[dbo].[Club] cp
+		ON UPPER(LTRIM(RTRIM(tr.PotentialClubAbbr))) = UPPER(LTRIM(RTRIM(cp.Club_Code)))
+		AND tr.season = cp.Season
+	LEFT JOIN [Analytics].[dbo].[map_nfl_player_status_transactions] st
+		ON UPPER(REPLACE(LTRIM(RTRIM(tr.ResultTransStatusDesc)),' ','')) = UPPER(REPLACE(LTRIM(RTRIM(st.nfl_status_description)),' ',''))
+		AND UPPER(REPLACE(LTRIM(RTRIM(tr.ResultTransStatusDescAbbr)),' ','')) = UPPER(REPLACE(LTRIM(RTRIM(st.nfl_status_abbreviation)),' ',''))		
+	LEFT JOIN [Analytics].[dbo].[map_nfl_player_status_games] ga
+		ON UPPER(REPLACE(LTRIM(RTRIM(st.status_roster_simple)),' ','')) = UPPER(REPLACE(LTRIM(RTRIM(ga.status_game)),' ',''))
+	WHERE tr.LeagueType = 'NFL'
+		AND TransStatus <> 50
+	ORDER BY PlayerID
+		,tr.Season
+		,OrderBy
+		  
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Remove the extraneous rows and fill in the status start and status end dates.
+
+	TEMP TABLES:
+		##temp_players_roster_status_dates
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if ##temp_players_roster_status_dates, if it does drop it
+	IF OBJECT_ID('tempdb..##temp_players_roster_status_dates') IS NOT NULL
+		DROP TABLE ##temp_players_roster_status_dates
+
+	SELECT nfl_player_id
+	      ,nfl_transaction_id
+		  ,season
+		  ,order_by	
+		  ,transaction_description
+          ,transaction_status_result_description
+		  ,status_roster_simple
+		  ,status_priority
+		  ,nfl_club_id_start
+		  ,nfl_club_id_result
+		  ,nfl_club_id_potential 
+		  ,transaction_start_date AS status_start_date
+	      ,CASE WHEN LEAD(nfl_player_id) OVER (ORDER BY nfl_player_id, season, order_by) <> nfl_player_id AND transaction_end_date IS NULL --it is the last row for that player and ToDate is missing
+				THEN 
+					CASE WHEN UPPER(REPLACE(LTRIM(RTRIM(transaction_status_result_description)),' ','')) LIKE 'RESERVE/%' THEN CASE WHEN CAST(GETDATE() AS DATE) <= DATEADD(MM,24,transaction_start_date) THEN CAST(GETDATE() AS DATE) ELSE DATEADD(MM,24,transaction_start_date) END
+					     ELSE CAST(GETDATE() AS DATE)
+					END 
+				ELSE DATEADD(DD,-1,LEAD(transaction_start_date) OVER (ORDER BY nfl_player_id, season, order_by))
+		   END AS status_end_date
+	INTO ##temp_players_roster_status_dates
+	FROM ##temp_player_transactions_nfl
+	WHERE 1=1
+		AND row_to_keep = 1
+	ORDER BY nfl_player_id
+		,season
+		,order_by
+
+
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Calculate the number of days in each status row.
+
+	There are some transactions that have a "season" variable from the league that 
+	doesn't match up with the season dates. For example it has a "season" of 2013
+	but both the start and end date are in the 2012 season.  To fix these kind of 
+	rows, join to League Year Dates table on both the listed and prevoius season
+	and use case statements to determine which season to use.
+
+	Do the same for the opposite scenario, where the start date is after the
+	league year end of the transaction table provided season.
+
+	*****
+
+	There are still some transactions with "backwards" dates. For example if a player
+	is promoted from the Practice Squad he would be both a Free Agent and a Practice
+	Squad player on the same day. So in the where clause remove any rows with these
+	"backwards" dates.
+
+	You may want to re-invesigate these kind of statuses at a later date.
+
+	******
+
+	STAGING TABLES:
+		stage_players_roster_status_by_date
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Truncate table stage_players_roster_status_by_date exists
+	TRUNCATE TABLE stage_players_roster_status_by_date
+
+	INSERT INTO stage_players_roster_status_by_date
+		([nfl_player_id]
+		,[nfl_transaction_id]
+		,[season]
+		,[order_by]
+		,[transaction_description]
+		,[transaction_status_result_description]
+		,[status_roster_simple]
+		,[status_priority]
+		,[status_start_date]
+		,[status_end_date]
+		,[nfl_club_id_start]
+		,[nfl_club_id_result]
+		,[nfl_club_id_potential]
+		,[total_days])
+	SELECT nfl_player_id
+	      ,nfl_transaction_id
+		  ,CASE WHEN status_end_date < ly.league_year_start THEN tr.season - 1 ELSE tr.season END AS season
+		  ,order_by	
+		  ,transaction_description
+          ,transaction_status_result_description
+		  ,status_roster_simple
+		  ,status_priority 
+		  ,status_start_date
+	      ,status_end_date	
+		  ,nfl_club_id_start
+		  ,nfl_club_id_result
+		  ,nfl_club_id_potential
+		  ,DATEDIFF(DAY, --the date difference between:
+					    (SELECT MAX(x) FROM (VALUES (CASE WHEN status_end_date < ly.league_year_start THEN lyp.league_year_start 
+														  WHEN status_start_date > ly.league_year_end THEN lyn.league_year_start
+														  ELSE ly.league_year_start 
+													 END)
+													,(status_start_date)) AS value(x)) --the higher of league year start and status start date
+					   ,(SELECT MIN(x) FROM (VALUES (CASE WHEN status_end_date < ly.league_year_start THEN lyp.league_year_end
+														  WHEN status_start_date > ly.league_year_end THEN lyn.league_year_end 
+														  ELSE ly.league_year_end 
+												     END)
+													 ,(status_end_date)) AS value(x)) --the lower of league year end and status end date
+			       ) 
+		   AS total_days
+/*
+
+KEEP THIS SECTION IN CASE YOU WANT TO GO BACK AND INVESTIGATE DATES LATER,
+BUT IT IS UNNECESSARY TO INCLUDE IN THE STAGE TABLE
+
+		  ,CASE WHEN status_end_date < ly.league_year_start THEN lyp.league_year_start 
+				WHEN status_start_date > ly.league_year_end THEN lyn.league_year_start
+				ELSE ly.league_year_start 
+		   END AS league_year_start
+		  ,CASE WHEN status_end_date < ly.league_year_start THEN lyp.league_year_end 
+				WHEN status_start_date > ly.league_year_end THEN lyn.league_year_end
+				ELSE ly.league_year_end 
+		   END AS league_year_end
+
+*/
+
+	FROM ##temp_players_roster_status_dates tr
+	INNER JOIN [Analytics].[dbo].[map_nfl_league_year_dates] ly
+		ON tr.season = ly.season
+	LEFT JOIN [Analytics].[dbo].[map_nfl_league_year_dates] lyp
+		ON tr.season - 1 = lyp.season
+	LEFT JOIN [Analytics].[dbo].[map_nfl_league_year_dates] lyn
+		ON tr.season + 1 = lyn.season
+	WHERE status_end_date >= status_start_date
+	ORDER BY nfl_player_id
+		,season
+		,order_by
+
+
+PROC_END:
+
+	RETURN @oReturnCD  
+
+END
+GO
+
+
