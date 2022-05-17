@@ -1,0 +1,273 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_completion_percentage_regressed]    Script Date: 5/17/2022 2:39:22 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_r_advanced_stats_completion_percentage_regressed] (@oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_r_advanced_stats_completion_percentage_regressed
+Author:			Corey Krawiec
+Creation Date:	11/11/2019
+Description:       
+
+	This program is to calculate the regressed completion percentage over expectation statistic.
+
+	1) Import the Passing Stats table from SQL
+	2) Load the Completion Percent Over Expectation model that was built in another program
+	3) Regress values
+	4) Assign grades and z scores
+	5) Assign percentiles
+	6) Append data to the regressed stats table in SQL
+
+		
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date		SE	Description
+---------	--	------------------------------------------------------------------
+
+				 
+**********************************************************************************/
+
+BEGIN 
+
+/*
+
+-- For Testing -- Uncomment the temp table creation and insert into that instead.
+
+create table #r_output_regressed_statistics (nfl_player_id INT,
+			season INT,
+            season_type_adjusted  VARCHAR(255),
+            statistic_id FLOAT,
+            statistic_denominator INT,
+            statistic_value FLOAT,
+            statistic_grade FLOAT,
+            statistic_percentile FLOAT,
+            statistic_z_score FLOAT
+			)
+
+*/
+
+
+-- For testing -- Comment out direct insert and insert into test table 
+-- insert into #r_output_regressed_statistics 
+insert into r_output_regressed_statistics 
+-- Submit the R job to R services.
+EXECUTE sp_execute_external_script 
+@language = N'R',
+@script = N'
+#######################################################################################################################
+#######################################################################################################################
+
+# This program is to calculate the regressed completion percentage over expectation statistic.
+
+# 1) Import the Passing Stats table from SQL
+# 2) Load the Completion Percent Over Expectation model that was built in another program
+# 3) Regress values
+# 4) Assign grades and z scores
+# 5) Assign percentiles
+# 6) Append data to the regressed stats table in SQL
+
+#######################################################################################################################
+#######################################################################################################################
+
+
+#######################################################################################################################
+#  Library Loading
+#######################################################################################################################
+
+# Load the necessary libraries
+library(dplyr)
+library(data.table)
+
+
+#######################################################################################################################
+# Filter the data
+#######################################################################################################################
+
+#Season Filter
+data_to_regress <- filter(data_to_regress, season >= 2013)
+
+#Snap Filter
+data_to_regress <- filter(data_to_regress, passing_catch_probability_attempt_sum > 0)
+
+
+#######################################################################################################################
+# Variable Creation
+#######################################################################################################################
+
+#Find the most recent REGULAR season in the dataset
+seasons <- data_to_regress %>% 
+  filter(season_type_adjusted == "REGPOST") %>%
+  summarise(max=max(season))
+max_season <- ifelse(as.integer(format(Sys.Date(), "%m")) >= 2 && as.integer(format(Sys.Date(), "%m")) < 10 && as.integer(format(Sys.Date(), "%Y")) >= seasons$max,seasons$max + 1,seasons$max)
+
+#Hypothesis Test for a Proportion...stat total / square root opportunities go in regression
+
+data_to_regress$attempts_sqrt <- sqrt(data_to_regress$passing_catch_probability_attempt_sum)
+
+data_to_regress$completions_above_stat_term <- (data_to_regress$passing_catch_probability_completion_sum - data_to_regress$passing_catch_probability_sum) / data_to_regress$attempts_sqrt
+
+
+#######################################################################################################################
+# Load the previously saved best model
+#######################################################################################################################
+
+load(file="R:\\model\\regressed_completion_percentage_model_legacy")
+
+
+#######################################################################################################################
+# Predict the new data
+#######################################################################################################################
+
+predictions <- predict(model, data_to_regress, na.action=na.pass)
+data_to_regress$statistic_value <- predictions
+data_to_regress$statistic_denominator <- data_to_regress$passing_catch_probability_attempt_sum
+data_to_regress$statistic_type <- "completion_percentage_over_expected"
+data_to_regress$statistic_id <- 15
+
+
+#######################################################################################################################
+# Assign Percentiles, Grades, and Z-Scores
+#######################################################################################################################
+
+#Create a new column that has NAs for stat_value if the player hasn"t reached the minimum denominator
+data_to_regress$statistic_value_na <- ifelse((data_to_regress$statistic_denominator >= 50 & data_to_regress$season_type_adjusted == "PRE") | data_to_regress$statistic_denominator >= 100,data_to_regress$statistic_value,NA)
+
+#Create a column that has a 1 if stat_value_na is not NA, 0 if it is NA (you sum this later to get the non NA rows)
+data_to_regress$statistic_value_boolean <- ifelse((data_to_regress$statistic_denominator >= 50 & data_to_regress$season_type_adjusted == "PRE") | data_to_regress$statistic_denominator >= 100,1,0)
+
+#Find the non NA position counts
+position_counts <- data_to_regress %>% 
+  group_by(season, rolling_game_stats, season_type_adjusted, position_blt) %>% 
+  summarise(row_count=sum(statistic_value_boolean))
+
+#Change the data frame to a data table
+data_to_regress <- as.data.table(data_to_regress)
+
+#Rank the stat_value_na
+data_to_regress[,statistic_rank:=rank(statistic_value_na, na.last = "keep", ties.method="max"),by=c("season", "rolling_game_stats", "season_type_adjusted", "position_blt")]
+
+#Change the data table back to a data frame
+data_to_regress <- as.data.frame(data_to_regress)
+
+#Create a table with the season grade means and st devs
+grade_thresholds <- data_to_regress %>%
+  filter((statistic_denominator >= 50 & season_type_adjusted == "PRE") | statistic_denominator >= 100) %>%
+  group_by(season, season_type_adjusted, rolling_game_stats, position_blt) %>% 
+  summarise(mean_stat = mean(statistic_value, na.rm = TRUE)
+            ,stdev_stat = sd(statistic_value, na.rm = TRUE)
+  ) 
+
+# Loop through all the rows in the dataset to assign values
+for (k in 1:nrow(data_to_regress)) {
+  
+  position_row <- which(position_counts$position_blt == data_to_regress[k,"position_blt"]
+                        & position_counts$season == data_to_regress[k,"season"]
+                        & position_counts$rolling_game_stats == data_to_regress[k,"rolling_game_stats"]
+                        & position_counts$season_type_adjusted == data_to_regress[k,"season_type_adjusted"]
+  )
+  
+  
+  threshold_row <- which(grade_thresholds$season == data_to_regress[k,"season"]
+                         & grade_thresholds$season_type_adjusted == data_to_regress[k,"season_type_adjusted"]
+                         & grade_thresholds$rolling_game_stats == data_to_regress[k,"rolling_game_stats"]
+                         & grade_thresholds$position_blt == data_to_regress[k,"position_blt"]
+  )
+  
+  # Calculate the percentile
+  data_to_regress[k,"statistic_percentile"] <- ifelse(!is.na(data_to_regress[k,"statistic_value_na"]), data_to_regress[k,"statistic_rank"] / position_counts[position_row,"row_count"], NA)
+  
+  # Calculate the z score
+  data_to_regress[k,"statistic_z_score"] <- ifelse(length(threshold_row) == 0,NA,(data_to_regress[k,"statistic_value"] - grade_thresholds[threshold_row,"mean_stat"]) / grade_thresholds[threshold_row,"stdev_stat"])
+  
+  # Assign the grades
+  if(is.na(data_to_regress[k,"statistic_value"])){
+    data_to_regress[k,"statistic_grade"] <- NA
+  }
+  else if(is.na(data_to_regress[k,"statistic_percentile"])){
+    data_to_regress[k,"statistic_grade"] <- NA
+  }
+  else if(data_to_regress[k,"statistic_percentile"] >= .90){
+    data_to_regress[k,"statistic_grade"] <- 7 
+  }   
+  else if(data_to_regress[k,"statistic_percentile"] < .90 & data_to_regress[k,"statistic_percentile"] >= .75){
+    data_to_regress[k,"statistic_grade"] <- 6
+  }
+  else if(data_to_regress[k,"statistic_percentile"] < .75 & data_to_regress[k,"statistic_percentile"] >= .40){
+    data_to_regress[k,"statistic_grade"] <- 5
+  }
+  else if(data_to_regress[k,"statistic_percentile"] < .40 & data_to_regress[k,"statistic_percentile"] >= .10){
+    data_to_regress[k,"statistic_grade"] <- 4
+  }
+  else {
+    data_to_regress[k,"statistic_grade"] <- 3
+  } 
+  
+  k <- k + 1
+}
+
+
+#######################################################################################################################
+# Write the new data back into an SQL table
+#######################################################################################################################
+
+#Take the necessary columns for SQL import
+for_sql <- data_to_regress %>% select(nfl_player_id
+                                     ,season
+                                     ,season_type_adjusted
+                                     ,statistic_id
+                                     ,statistic_denominator
+                                     ,statistic_value
+                                     ,statistic_grade
+                                     ,statistic_percentile
+                                     ,statistic_z_score
+									 ,rolling_game_stats
+                                     )
+
+',  
+@input_data_1 = N'SELECT *
+  FROM [dbo].[r_input_stats_passing]
+   where position_blt IN (''QB'')',
+@input_data_1_name = N'data_to_regress',
+@output_data_1_name = N'for_sql'
+/*
+-- For testing -- Not needed if inserting directly into the table
+WITH RESULT SETS 
+			((nfl_player_id INT,
+			season INT,
+            season_type_adjusted  VARCHAR(255),
+            statistic_id FLOAT,
+            statistic_denominator INT,
+            statistic_value FLOAT,
+            statistic_grade FLOAT,
+            statistic_percentile FLOAT,
+            statistic_z_score FLOAT
+			))
+
+*/
+			
+--r_output_regressed_statistics
+
+
+END
+
+GO
+
+
