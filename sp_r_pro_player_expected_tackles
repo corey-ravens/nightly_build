@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_pro_player_expected_tackles_db]    Script Date: 5/17/2022 3:52:57 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_player_expected_tackles_front_7]    Script Date: 5/17/2022 3:53:26 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -19,26 +19,23 @@ GO
 
 
 
-
-ALTER procedure [dbo].[sp_r_pro_player_expected_tackles_db] (@oReturnCD INT OUTPUT) as
+ALTER procedure [dbo].[sp_r_pro_player_expected_tackles_front_7] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_r_pro_expected_tackles_db
+Procedure Name:	sp_r_pro_player_expected_tackles_front_7
 Author:			Jeremy Parks
 Creation Date:	06/29/2017
 Description:       
 
-	This program is to calculate the regressed expected tackles statistic for DB positions.
+	This program is to calculate the regressed expected tackles statistic for front 7 positions.
 
-	1) Import the DB Tackles Stats table from SQL
+	1) Import the Front 7 Tackles Stats table from SQL
 	2) Load the Expected Tackles Model that was built in another program
 	3) Regress values
 	4) Assign grades and z scores
 	5) Assign percentiles
 	6) Append data to the regressed stats table in SQL
-
-
 		
 Input Parameters:
 	None
@@ -56,7 +53,6 @@ Date		SE	Description
 BEGIN 
 
 /*
-
 -- For Testing -- Uncomment the temp table creation and insert into that instead.
 
 create table #bane_pro_player_regressed_stats (nfl_player_id INT,
@@ -75,7 +71,8 @@ create table #bane_pro_player_regressed_stats (nfl_player_id INT,
 
 -- For testing -- Comment out direct insert and insert into test table 
 -- insert into #bane_pro_player_regressed_stats 
-delete from bane_pro_player_regressed_stats where statistic_id = 1
+--do not do the delete statement here because this stat has the same id as the stat for DBs and DBS happens first, if you
+	--do it here you'd erase the DB stats that just got added
 insert into bane_pro_player_regressed_stats
 -- Submit the R job to R services.
 EXECUTE sp_execute_external_script 
@@ -84,9 +81,9 @@ EXECUTE sp_execute_external_script
 #######################################################################################################################
 #######################################################################################################################
 
-# This program is to calculate the regressed expected tackles statistic for DB positions.
+# This program is to calculate the regressed expected tackles statistic for front 7 positions.
 
-# 1) Import the DB Tackles Stats table from SQL
+# 1) Import the Front 7 Tackles Stats table from SQL
 # 2) Load the Expected Tackles Model that was built in another program
 # 3) Regress values
 # 4) Assign grades and z scores
@@ -104,7 +101,6 @@ EXECUTE sp_execute_external_script
 # Load the necessary libraries
 library(dplyr)
 library(data.table)
-library(RODBC)
 
 
 #######################################################################################################################
@@ -114,17 +110,10 @@ library(RODBC)
 #Season Filter
 data_to_regress <- filter(data_to_regress, season >= 2013)
 
-#Play Filter
-data_to_regress <- filter(data_to_regress, play_count_run_sum > 0)
-
 
 #######################################################################################################################
 # Variable Creation
 #######################################################################################################################
-
-#Get the max week so you can see what threshold to set...usually not enough snaps in week 1 for program to run otherwise
-#max_week <- max(data_to_regress$max_week)
-max_week <- 201
 
 #Find the most recent REGULAR season in the dataset
 seasons <- data_to_regress %>% 
@@ -132,13 +121,9 @@ seasons <- data_to_regress %>%
   summarise(max=max(season))
 max_season <- ifelse(as.integer(format(Sys.Date(), "%m")) >= 2 && as.integer(format(Sys.Date(), "%m")) < 10 && as.integer(format(Sys.Date(), "%Y")) >= seasons$max,seasons$max + 1,seasons$max)
 
-#Change NBs to CBs 
-# **This is a temporary fix in 11/2017, eventually change the model to use position group blt instead of doing this variable swap-in
-data_to_regress$position_blt <- data_to_regress$position_group_blt
-
 #Hypothesis Test for a Proportion...stat total / square root opportunities go in regression
 
-data_to_regress$play_count_sqrt <- sqrt(data_to_regress$play_count_run_sum)
+data_to_regress$play_count_sqrt <- sqrt(data_to_regress$play_count_sum)
 
 data_to_regress$tackle_above_stat_term <- (data_to_regress$tackle_4_way_sum - data_to_regress$tackle_probability_sum) / data_to_regress$play_count_sqrt
 
@@ -147,7 +132,7 @@ data_to_regress$tackle_above_stat_term <- (data_to_regress$tackle_4_way_sum - da
 # Load the previously saved best model
 #######################################################################################################################
 
-load(file="R:\\model\\regressed_expected_tackles_dc_model")
+load(file="R:\\model\\regressed_expected_tackles_non_dc_model")
 
 
 #######################################################################################################################
@@ -156,7 +141,7 @@ load(file="R:\\model\\regressed_expected_tackles_dc_model")
 
 predictions <- predict(model, data_to_regress, na.action=na.pass)
 data_to_regress$statistic_value <- predictions
-data_to_regress$statistic_denominator <- data_to_regress$play_count_run_sum
+data_to_regress$statistic_denominator <- data_to_regress$play_count_sum
 data_to_regress$statistic_type <- "extra_tackles"
 data_to_regress$statistic_id <- 1
 
@@ -191,7 +176,7 @@ grade_thresholds <- data_to_regress %>%
   group_by(season, season_type_adjusted, rolling_game_stats, position_blt) %>% 
   summarise(mean_stat = mean(statistic_value, na.rm = TRUE)
             ,stdev_stat = sd(statistic_value, na.rm = TRUE)
-  ) 
+  )  
 
 # Loop through all the rows in the dataset to assign values
 for (k in 1:nrow(data_to_regress)) {
@@ -242,7 +227,6 @@ for (k in 1:nrow(data_to_regress)) {
   #data_to_regress[k,"statistic_value"] <- (data_to_regress[k,"statistic_value"] - grade_thresholds[threshold_row,"mean_stat"]) * 65 #Multiply by 65 because ~65 plays a game, so then stat gives you extra tackles per game
   data_to_regress[k,"statistic_value"] <- ifelse((data_to_regress[k,"statistic_denominator"] >= 50 & data_to_regress[k,"season_type_adjusted"] == "PRE") | data_to_regress[k,"statistic_denominator"] >= 100,(data_to_regress[k,"statistic_value"] - grade_thresholds[threshold_row,"mean_stat"]) * 65,NA) #Multiply by 65 because ~65 plays a game, so then stat gives you extra tackles per game
   
-  
   k <- k + 1
 }
 
@@ -267,12 +251,12 @@ for_sql <- data_to_regress %>% select(nfl_player_id
 ',  
 @input_data_1 = N'SELECT *
   FROM [dbo].[pro_player_tackling_stats]
-  where position_blt in (''CB'',''NB'')',
+  where position_blt IN (''DE43'',''DT3T'',''NT'',''DE5T'',''OB34'',''RUSH'',''SAM'',''MIKE'',''WILL'',''FS'',''SS'')',
 @input_data_1_name = N'data_to_regress',
 @output_data_1_name = N'for_sql'
 /*
 
--- For testing -- Uncomment
+-- For Testing -- Do not need to define if inserting into table
 WITH RESULT SETS 
 			((nfl_player_id INT,
 			season INT,
@@ -284,9 +268,8 @@ WITH RESULT SETS
             statistic_percentile FLOAT,
             statistic_z_score FLOAT
 			))
-
 */
-
+			
 --bane_pro_player_regressed_stats
 
 
