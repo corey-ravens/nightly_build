@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_completion_percentage_regressed]    Script Date: 5/17/2022 2:39:22 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_player_completion_percentages]    Script Date: 5/17/2022 2:37:07 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -13,11 +13,17 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_r_advanced_stats_completion_percentage_regressed] (@oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+ALTER procedure [dbo].[sp_r_pro_player_completion_percentages] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_r_advanced_stats_completion_percentage_regressed
+Procedure Name:	sp_r_pro_player_completion_percentages
 Author:			Corey Krawiec
 Creation Date:	11/11/2019
 Description:       
@@ -51,7 +57,7 @@ BEGIN
 
 -- For Testing -- Uncomment the temp table creation and insert into that instead.
 
-create table #r_output_regressed_statistics (nfl_player_id INT,
+create table #bane_pro_player_regressed_stats (nfl_player_id INT,
 			season INT,
             season_type_adjusted  VARCHAR(255),
             statistic_id FLOAT,
@@ -66,8 +72,9 @@ create table #r_output_regressed_statistics (nfl_player_id INT,
 
 
 -- For testing -- Comment out direct insert and insert into test table 
--- insert into #r_output_regressed_statistics 
-insert into r_output_regressed_statistics 
+-- insert into #bane_pro_player_regressed_stats 
+delete from bane_pro_player_regressed_stats where statistic_id = 15
+insert into bane_pro_player_regressed_stats
 -- Submit the R job to R services.
 EXECUTE sp_execute_external_script 
 @language = N'R',
@@ -243,7 +250,7 @@ for_sql <- data_to_regress %>% select(nfl_player_id
 
 ',  
 @input_data_1 = N'SELECT *
-  FROM [dbo].[r_input_stats_passing]
+  FROM [dbo].[pro_player_passing_stats]
    where position_blt IN (''QB'')',
 @input_data_1_name = N'data_to_regress',
 @output_data_1_name = N'for_sql'
@@ -263,7 +270,7 @@ WITH RESULT SETS
 
 */
 			
---r_output_regressed_statistics
+--bane_pro_player_regressed_stats
 
 
 END
