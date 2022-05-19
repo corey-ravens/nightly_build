@@ -1,0 +1,447 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program is for creating new Player Contract tables
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a master transactions table with bane club ids
+
+OUTPUT TABLES:
+#temp_transactions
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_transactions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_transactions') IS NOT NULL
+	DROP TABLE #temp_transactions
+
+	SELECT transid AS transaction_id
+		,PlayerID AS nfl_player_id
+		,dtLoadDate AS load_date
+		,Season AS season
+		,TransactionDate AS transaction_date
+		,ToDate AS to_date
+		,OrderBy AS order_by
+		,TransactionDesc AS transaction_description
+		,TransactionDescAbbr AS transaction_abbreviation
+		,TransStatus AS transaction_status
+		,InitialTransStatusDescAbbr AS initial_status_abbreviation
+		,InitialTransStatusShortDesc AS initial_status_description_short
+		,InitialTransStatusDesc AS initial_status_description
+		,ResultTransStatusDescAbbr AS result_status_abbreviation
+		,ResultTransStatusShortDesc AS result_status_description_short
+		,ResultTransStatusDesc AS result_status_description
+		,PcmsContractID AS pcms_contract_id
+		,Comments1 AS comments_1
+		,Comments2 AS comments_2	
+		,sc.id AS start_club_bane_id
+		,rc.id AS result_club_bane_id
+		,pc.id AS potential_club_bane_id	 
+	INTO #temp_transactions
+	FROM ProDB.dbo.TransactionTable tt
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs rc
+		ON LTRIM(RTRIM(tt.ResultClubAbbr)) = LTRIM(RTRIM(rc.code))
+		--AND rc.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs sc
+		ON LTRIM(RTRIM(tt.StartClubAbbr)) = LTRIM(RTRIM(sc.code))
+		--AND sc.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
+		ON LTRIM(RTRIM(tt.PotentialClubAbbr)) = LTRIM(RTRIM(pc.code))
+		--AND pc.is_disabled = 0
+	WHERE 1=1
+		AND LeagueType = 'NFL'
+		AND TransStatus = 30
+	ORDER BY PlayerID
+		,OrderBy DESC
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Flag disapproved contracts
+
+OUTPUT TABLES:
+#temp_disappoved_contracts
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_disapproved_contracts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_disapproved_contracts') IS NOT NULL
+	DROP TABLE #temp_disapproved_contracts
+
+	SELECT *
+		,CASE WHEN transaction_abbreviation IN ('CO03','CO05','CO06','CO07') 
+			OR (LAG(transaction_abbreviation) OVER (ORDER BY nfl_player_id, order_by DESC) IN ('CO03','CO05','CO06','CO07')
+			AND (UPPER(transaction_abbreviation) LIKE '%FA%' OR transaction_abbreviation IN ('SS01','SI99')))
+		THEN 1 
+		ELSE 0 
+		END AS flag_disapproved_contract
+	INTO #temp_disapproved_contracts
+	FROM #temp_transactions
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the nfl transactions table.
+
+OUTPUT TABLES:
+#temp_transactions_nfl
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_transactions_nfl exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_transactions_nfl') IS NOT NULL
+	DROP TABLE #temp_transactions_nfl
+
+	SELECT *
+		,CASE WHEN LAG(flag_disapproved_contract) OVER (ORDER BY nfl_player_id, order_by) = 0 AND flag_disapproved_contract = 1 THEN 0
+			WHEN flag_disapproved_contract = 1 THEN 1
+			WHEN flag_disapproved_contract = 0 THEN 0 
+		END AS flag_disapproved_contract_match
+	INTO #temp_transactions_nfl
+	FROM #temp_disapproved_contracts
+	ORDER BY nfl_player_id
+		,order_by
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a list of all contracts with voided seasons
+
+OUTPUT TABLES:
+#temp_void_seasons
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_void_seasons exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_void_seasons') IS NOT NULL
+	DROP TABLE #temp_void_seasons
+	
+	SELECT DISTINCT ContractID AS nfl_contract_id
+		,Season AS season
+	INTO #temp_void_seasons
+	FROM [ClubDB].[dbo].[SectionYearRep]
+	WHERE SectionType = 'Void Year'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the voided seasons to the cap and contract data
+
+OUTPUT TABLES:
+#temp_cap_contract_to_void
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_cap_contract_to_void exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_contract_to_void') IS NOT NULL
+	DROP TABLE #temp_cap_contract_to_void
+
+	SELECT ContractID AS nfl_contract_id
+		,cap.Season AS season
+		,cap.Cash AS cash
+	INTO #temp_cap_contract_to_void
+	FROM ClubDB.dbo.CapRollup cap
+	INNER JOIN ClubDB.dbo.ContractRep con
+		ON cap.PlayerID = con.PlayerID
+		AND cap.FromDate = con.SignDate
+		AND cap.Season BETWEEN con.FirstContractYear AND con.LastContractYear
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table to sum up the real money of contracts with void seasons.
+
+OUTPUT TABLES:
+#temp_contracts_cash_exclude_voids
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_contracts_cash_exclude_voids exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contracts_cash_exclude_voids') IS NOT NULL
+	DROP TABLE #temp_contracts_cash_exclude_voids
+
+	SELECT cv.nfl_contract_id
+		,SUM(CASE WHEN vs.nfl_contract_id IS NULL THEN cash ELSE 0 END) AS total_cash
+		,MIN(CASE WHEN vs.nfl_contract_id IS NULL THEN cv.season ELSE NULL END) AS first_contract_year
+		,MAX(CASE WHEN vs.nfl_contract_id IS NULL THEN cv.season ELSE NULL END) AS last_contract_year
+	INTO #temp_contracts_cash_exclude_voids
+	FROM #temp_cap_contract_to_void cv
+	LEFT JOIN #temp_void_seasons vs
+		ON cv.nfl_contract_id = vs.nfl_contract_id
+		AND cv.season = vs.season
+	WHERE cv.nfl_contract_id IN (SELECT DISTINCT nfl_contract_id FROM #temp_void_seasons)
+	GROUP BY cv.nfl_contract_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the basic contract summary table.
+
+OUTPUT TABLES:
+#temp_player_contract_summary_basic
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_contract_summary_basic exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_contract_summary_basic') IS NOT NULL
+	DROP TABLE #temp_player_contract_summary_basic
+
+	SELECT ContractRepId AS nfl_contract_rep_id
+		,LAG(ContractRepId) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS previous_nfl_contract_rep_id
+		,ContractID AS nfl_contract_id
+		,LAG(ContractID) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS previous_nfl_contract_id
+		,PlayerID AS nfl_player_id
+		,CONCAT(Player_LastName,', ',Player_FootballName) AS player
+		,AgentID AS nfl_agent_id
+		,ClubID AS nfl_club_id
+		,LAG(ClubID) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS previous_nfl_club_id
+		,cl.id AS bane_club_id
+		,TransID AS nfl_transaction_id
+		,SignDate AS signing_date
+		,LEAD(SignDate) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS signing_date_next_contract
+		,LTRIM(RTRIM(SigningType)) AS signing_type
+		,CASE WHEN LAG(EffectiveLastContractYear,1) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) <= FirstContractYear THEN 1 ELSE 0 END AS open_market_renegotiation
+		,CASE WHEN LTRIM(RTRIM(SigningType)) IN ('Selection List Signing','Undrafted Rookie Signing') THEN 1 ELSE 0 END AS rookie_contract
+		,FirstContractYear AS first_contract_year
+		,COALESCE(LAG(EffectiveLastContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) + 1,FirstContractYear) AS new_money_first_contract_year
+		,LastContractYear AS last_contract_year
+		,EffectiveLastContractYear AS effective_last_contract_year
+		,COALESCE(LEAD(FirstContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate)- 1,EffectiveLastContractYear) AS actual_last_contract_year
+		,LastContractYear - FirstContractYear + 1 AS total_years
+		,TotalPackageAmt AS total_package_amount
+		--,CASE WHEN TotalSigningBonus = 0 AND SigningType = 'Selection List Signing' THEN TotalOption ELSE TotalSigningBonus END AS total_signing_bonus
+		,ThreeYearComp AS three_year_compensation
+		,CASE WHEN (LastContractYear - FirstContractYear + 1) >= 3 THEN ThreeYearComp / 3 ELSE ThreeYearComp / (LastContractYear - FirstContractYear + 1) END AS three_year_average_per_year
+		,TotalOffseason AS total_offseason_bonus
+		,TotalP5 AS total_p5
+		,TotalSigningBonus AS total_signing_bonus
+		,TotalReportingBonus AS total_reporting_bonus
+		,TotalRosterBonus AS total_roster_bonus
+		,TotalIncentives AS total_incentives
+		,TotalOption AS total_option_bonus
+		,HTMLFileName AS html_file_name
+		,ContractEnteredSystem AS system_entry_date
+		,TotalPackageAmt / (LastContractYear - FirstContractYear + 1) AS total_average_per_year
+		,TotalP5 / (LastContractYear - FirstContractYear + 1) AS p5_average_per_year
+		,EffectiveContract AS effective_contract
+		,MostRecentContract AS most_recent_contract
+		,MinSalaryBenefitContract AS is_minimum_salary_benefit_contract
+		,RANK() OVER (PARTITION BY PlayerID ORDER BY SignDate, TransID) AS contract_record_count
+		,RANK() OVER (PARTITION BY PlayerID, FirstContractYear ORDER BY SignDate) AS same_season_contract_count
+		,(SELECT SUM(CASE WHEN LTRIM(RTRIM(SigningType)) = 'Renegotiation/Extension' THEN 1 ELSE 0 END) 
+			FROM ClubDb.dbo.ContractRep cr2
+			WHERE cr.PlayerID = cr2.PlayerID
+				AND cr.ClubID = cr2.ClubID
+				AND cr.SignDate >= cr2.SignDate) 
+		AS extension_count 
+	INTO #temp_player_contract_summary_basic
+	FROM ClubDb.dbo.ContractRep cr
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON cr.ClubID = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	WHERE EffectiveLastContractYear >= 2012
+		AND LTRIM(RTRIM(SigningType)) NOT IN ('Reserve, Selection List'
+			,'Reserve/Selection List'
+			,'Qualifying Offer by Old Club'
+			,'Practice Squad'
+			,'Received Minimum Salary Offer'
+			,'Practice Squad Exception'
+			,'Signed New Contract (pd-->pd)'
+			,'Offer Sheet Executed'
+			,'Designated Transition Player'
+			,'Asked to Re-Sign'
+			,'Contract Tolled'
+			,'Designated Franchise Player'
+			,'Reserve/Supplemental Selection'
+			,'Signed, Renegotiated Practice Squad Contact'
+			,'Signed, Renegotiated Practice Squad Contract'
+			)
+	ORDER BY PlayerID
+		,SignDate
+
+/*
+SELECT * 
+FROM #temp_player_contract_summary_basic
+WHERE player = 'Flacco, Joe'
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the table that gets you the 5th year option amount so you can add it in to 
+the yearly compensation if it is picked up for a given player.
+
+OUTPUT TABLES:
+#temp_fifth_year_option
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_fifth_year_option exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_fifth_year_option') IS NOT NULL
+	DROP TABLE #temp_fifth_year_option
+
+    SELECT DISTINCT ContractRepID
+          ,syr.ContractID
+          ,syr.SectionID
+          ,syr.Season
+          ,SectionType
+          ,ClauseType
+		  ,Guar_Cap AS fifth_year_option_amount
+	  INTO #temp_fifth_year_option
+      FROM ClubDB.dbo.SectionYearRep syr
+INNER JOIN ClubDB.dbo.CapGuarantee cg
+		ON syr.SectionID = cg.ChangingSectionID
+	   AND syr.Season = cg.Season 
+	   AND cg.Effective = 1
+	   AND cg.Finalized = 1
+	   --AND cg.Guar_Cap > 0
+     WHERE SectionType = 'Option Year'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the table that has the yearly Cash Breakdown of contracts. Join in the 
+5th year option amounts where applicable.
+
+You include the WHERE clause because sometimes there are "fake" contract years in the
+ContractYearRep table, namely when early cash is paid out (see Joe Flacco). His second
+contract has a row for 2012 in ContractYearRep (because that's when his early cash was
+paid), but the actual contract started in 2013.
+
+OUTPUT TABLES:
+#temp_contract_year_breakdown
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_contract_year_breakdown exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contract_year_breakdown') IS NOT NULL
+	DROP TABLE #temp_contract_year_breakdown
+
+    SELECT cy.ContractRepID AS nfl_contract_rep_id
+		  ,cy.ContractID AS nfl_contract_id
+		  ,previous_nfl_contract_rep_id
+		  ,previous_nfl_contract_id
+		  ,new_money_first_contract_year
+		  ,nfl_player_id
+		  ,cy.Season AS season
+		  ,CASE WHEN fifth_year_option_amount IS NOT NULL THEN fifth_year_option_amount ELSE AnnualFullP5 + AnnualReportingBonus + AnnualRosterBonus END AS annual_compensation
+	  INTO #temp_contract_year_breakdown
+      FROM ClubDB.dbo.ContractYearRep cy
+INNER JOIN #temp_player_contract_summary_basic cr
+		ON cy.ContractRepID = cr.nfl_contract_rep_id
+	   AND cy.ContractID = cr.nfl_contract_id
+ LEFT JOIN #temp_fifth_year_option fyo
+		ON cy.ContractRepID = fyo.ContractRepID
+	   and cy.ContractID = fyo.ContractID
+	   AND cy.Season = fyo.Season
+     WHERE cy.Season >= first_contract_year 
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the previous contract to the newer contract
+
+OUTPUT TABLES:
+#temp_contract_year_breakdown_with_prev
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_contract_year_breakdown_with_prev exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contract_year_breakdown_with_prev') IS NOT NULL
+	DROP TABLE #temp_contract_year_breakdown_with_prev
+
+    SELECT new.nfl_contract_rep_id
+		  ,new.nfl_contract_id
+		  ,new.previous_nfl_contract_rep_id
+		  ,new.previous_nfl_contract_id
+		  ,new.new_money_first_contract_year
+		  ,new.nfl_player_id
+		  ,new.season
+		  ,new.annual_compensation AS annual_compensation_new
+		  ,old.annual_compensation AS annual_compensation_old
+	  INTO #temp_contract_year_breakdown_with_prev
+      FROM #temp_contract_year_breakdown new
+ LEFT JOIN #temp_contract_year_breakdown old
+		ON new.previous_nfl_contract_rep_id = old.nfl_contract_rep_id
+	   AND new.previous_nfl_contract_id = old.nfl_contract_id
+	   AND new.season = old.season
+
+/*
+SELECT *
+FROM #temp_contract_year_breakdown_with_prev
+WHERE nfl_player_id = 28953
+ORDER BY nfl_contract_id, season
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the new and old money in each contract.
+
+OUTPUT TABLES:
+#temp_contract_compensation_old_new
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_contract_compensation_old_new exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contract_compensation_old_new') IS NOT NULL
+	DROP TABLE #temp_contract_compensation_old_new
+
+    SELECT nfl_contract_rep_id
+		  ,nfl_contract_id
+		  ,nfl_player_id
+		  ,SUM(annual_compensation_new) AS total_compensation_new
+		  ,SUM(annual_compensation_old) AS total_compensation_old
+	  INTO #temp_contract_compensation_old_new
+      FROM #temp_contract_year_breakdown_with_prev
+  GROUP BY nfl_contract_rep_id
+		  ,nfl_contract_id
+		  ,nfl_player_id
+
+/*
+SELECT *
+FROM #temp_contract_compensation_old_new
+WHERE nfl_player_id = 33099
+ORDER BY nfl_contract_id
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the old and new money values into the basic contract table
+
+OUTPUT TABLES:
+#temp_player_contract_summary
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_contract_summary exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_contract_summary') IS NOT NULL
+	DROP TABLE #temp_player_contract_summary
+
+    SELECT cs.*
+		  ,COALESCE(total_signing_bonus,0) + COALESCE(total_option_bonus,0) + COALESCE(total_compensation_new,0) - COALESCE(total_compensation_old,0) AS new_money
+		  ,(COALESCE(total_signing_bonus,0) + COALESCE(total_option_bonus,0) + COALESCE(total_compensation_new,0) - COALESCE(total_compensation_old,0)) / NULLIF(effective_last_contract_year - new_money_first_contract_year + 1,0) AS new_money_average_per_year
+		  ,(effective_last_contract_year - new_money_first_contract_year + 1) AS new_money_years
+	  --INTO #temp_player_contract_summary
+      FROM #temp_player_contract_summary_basic cs
+ LEFT JOIN #temp_contract_compensation_old_new con
+		ON cs.nfl_contract_rep_id = con.nfl_contract_rep_id
+	   AND cs.nfl_contract_id = con.nfl_contract_id
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON cs.nfl_player_id = pl.nfl_id
+INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	 WHERE current_club_id IS NOT NULL
+	   AND translation = 'QB'
+
+/*
+SELECT *
+FROM #temp_player_contract_summary
+WHERE player = 'Flacco, Joe'
+ORDER BY nfl_contract_id
+*/
