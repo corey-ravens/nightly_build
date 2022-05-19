@@ -11,7 +11,7 @@ Description:
 
 	This program is for creating new Player Contract tables
 
-	1)	Create a transactions table that includes nfl club ids and flags disapproved contracts
+	1)	Create a transactions table that includes nfl club ids and flags disapproved contracts and sign and trades
 	2)	Find real money of all contracts:  account for voids, 5th year options, and early cash payouts
 	3)	Create basic contract summary table and add in a running 'true extension' count
 	4)  Determine the 'new money' in each contract
@@ -29,6 +29,7 @@ Date		SE				Description
 11/24/2017	Corey Krawiec	Finds contract with voided years and takes those years out (v2)
 10/09/2018	Corey Krawiec	Added step to find early money and make sure it is counted for the true value of contracts with voided years (v3)
 10/09/2018	Corey Krawiec	Moved 5th year option to part 2 along with the void years. The new and old money totals need the early cash and voids too. (v4)
+10/11/2018	Corey Krawiec	Updated the ContractRep table for when players are signed and traded in the same day. Create an 'effective club id' variable
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -68,9 +69,9 @@ Date		SE				Description
 		,PcmsContractID AS pcms_contract_id
 		,Comments1 AS comments_1
 		,Comments2 AS comments_2	
-		,sc.id AS start_club_bane_id
-		,rc.id AS result_club_bane_id
-		,pc.id AS potential_club_bane_id	
+		,sc.nfl_club_id AS start_nfl_club_id
+		,rc.nfl_club_id AS result_nfl_club_id
+		,pc.nfl_club_id AS potential_nfl_club_id	
 		,potentialClubAbbr 
 	INTO #temp_transactions
 	FROM ProDB.dbo.TransactionTable tt
@@ -105,7 +106,7 @@ Date		SE				Description
 
 	SELECT *
 		,CASE WHEN transaction_abbreviation IN ('CO03','CO05','CO06','CO07') 
-			OR (LAG(transaction_abbreviation) OVER (ORDER BY nfl_player_id, order_by DESC) IN ('CO03','CO05','CO06','CO07')
+			OR (LAG(transaction_abbreviation) OVER (PARTITION BY nfl_player_id ORDER BY order_by DESC) IN ('CO03','CO05','CO06','CO07')
 			AND (UPPER(transaction_abbreviation) LIKE '%FA%' OR transaction_abbreviation IN ('SS01','SI99')))
 		THEN 1 
 		ELSE 0 
@@ -131,7 +132,7 @@ Date		SE				Description
 		DROP TABLE #temp_transactions_nfl
 
 	SELECT *
-		,CASE WHEN LAG(flag_disapproved_contract) OVER (ORDER BY nfl_player_id, order_by) = 0 AND flag_disapproved_contract = 1 THEN 0
+		,CASE WHEN LAG(flag_disapproved_contract) OVER (PARTITION BY nfl_player_id ORDER BY order_by) = 0 AND flag_disapproved_contract = 1 THEN 0
 			WHEN flag_disapproved_contract = 1 THEN 1
 			WHEN flag_disapproved_contract = 0 THEN 0 
 		END AS flag_disapproved_contract_match
@@ -139,6 +140,68 @@ Date		SE				Description
 	FROM #temp_disapproved_contracts
 	ORDER BY nfl_player_id
 		,order_by
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(1) - e
+
+
+	Find the 'sign and trade' transactions so you can switch the club id on those contracts.
+	For example Jared Allen signs with KC on 04/23/2008 and is traded to MIN the same day.
+
+	OUTPUT TABLES:
+	#temp_transactions_sign_trade
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_transactions_sign_trade exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_transactions_sign_trade') IS NOT NULL
+		DROP TABLE #temp_transactions_sign_trade
+
+	SELECT *
+		,CASE WHEN transaction_description IN ('Exclusive Signing'
+												,'Franchise Player Signing'
+												,'UFA Signing'
+												,'Transition Player Signing'
+												,'Signed MS Tender Prior to Contract Expiring'
+												,'RFA Signing'
+												,'Exclusive Rights Signing'
+												,'Signed Transition Tender Prior to Contract Exp'
+												,'Selection List Signing'
+												,'International Practice Player Signing'
+												,'Undrafted Rookie Signing'
+												,'Signed Franchise Tender Prior to Contract Expiring'
+												,'Signed Qual. Offer Prior to Contract Expiring'
+												,'Renegotiation/Extension'
+												,'Free Agent Signing')
+			AND LEAD(transaction_description) OVER (PARTITION BY nfl_player_id ORDER BY order_by) = 'Traded'
+			AND LEAD(transaction_date) OVER (PARTITION BY nfl_player_id ORDER BY order_by) = transaction_date
+		THEN 1
+		ELSE 0 
+		END AS sign_and_trade
+		,CASE WHEN transaction_description IN ('Exclusive Signing'
+												,'Franchise Player Signing'
+												,'UFA Signing'
+												,'Transition Player Signing'
+												,'Signed MS Tender Prior to Contract Expiring'
+												,'RFA Signing'
+												,'Exclusive Rights Signing'
+												,'Signed Transition Tender Prior to Contract Exp'
+												,'Selection List Signing'
+												,'International Practice Player Signing'
+												,'Undrafted Rookie Signing'
+												,'Signed Franchise Tender Prior to Contract Expiring'
+												,'Signed Qual. Offer Prior to Contract Expiring'
+												,'Renegotiation/Extension'
+												,'Free Agent Signing')
+			AND LEAD(transaction_description) OVER (PARTITION BY nfl_player_id ORDER BY order_by) = 'Traded'
+			AND LEAD(transaction_date) OVER (PARTITION BY nfl_player_id ORDER BY order_by) = transaction_date
+		THEN LEAD(result_nfl_club_id) OVER (PARTITION BY nfl_player_id ORDER BY order_by)
+		ELSE 0 
+		END AS sign_trade_nfl_club_id
+	INTO #temp_transactions_sign_trade
+	FROM #temp_transactions_nfl
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -282,16 +345,40 @@ Date		SE				Description
 
 	Join the fifth year options and early cash to the cap and contract data.
 
+	Also create a temp version of ClubDB.dbo.ContractRep that replaces the ClubID for 'sign and trade' contracts.
+
 	Note you create two variables here for cash and p5 with and without fifth year option. While you could use a 
 	case statement to just leave it as one variable that is different based on whether or not the option has been 
 	exercised, for now you keep both so you can easily see what the difference is.  In later steps, you use a case
 	statement that fills in a value for cash or p5 based on the option. For this table you keep the variables 
 	separate.  When a fifth year option isn't exercised, then the value in both fields are the same.
 
-	OUTPUT TABLES:
+	OUTPUT TABLES
+	#temp_contract_rep_sign_trade
 	#temp_cap_contract_fifth_early
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_contract_rep_sign_trade exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_contract_rep_sign_trade') IS NOT NULL
+		DROP TABLE #temp_contract_rep_sign_trade
+
+	SELECT ContractRepID
+		,ContractID
+		,PlayerID
+		,AgentID
+		,CASE WHEN sign_and_trade = 1 THEN sign_trade_nfl_club_id ELSE ClubID END AS ClubID
+		,TransID
+		,SignDate
+		,FirstContractYear
+		,LastContractYear
+		,sign_and_trade
+	INTO #temp_contract_rep_sign_trade
+	FROM ClubDB.dbo.ContractRep cr
+	LEFT JOIN #temp_transactions_sign_trade st
+		ON cr.TransID = st.transaction_id
+		AND st.sign_and_trade = 1
+
 
 	-- Check if #temp_cap_contract_fifth_early exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_cap_contract_fifth_early') IS NOT NULL
@@ -311,7 +398,7 @@ Date		SE				Description
 		,cap.CashLTBE_RB + ISNULL(early_cash_roster_bonus,0) AS roster_bonus
 	INTO #temp_cap_contract_fifth_early
 	FROM ClubDB.dbo.CapRollup cap
-	INNER JOIN ClubDB.dbo.ContractRep con
+	INNER JOIN #temp_contract_rep_sign_trade con
 		ON cap.PlayerID = con.PlayerID
 		AND cap.FromDate = con.SignDate
 		AND cap.ClubID = con.ClubID
