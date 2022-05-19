@@ -1,0 +1,158 @@
+USE [Analytics]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_tackle_probability]    Script Date: 5/19/2022 11:21:46 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+ALTER procedure [dbo].[sp_r_advanced_stats_tackle_probability] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+/*********************************************************************************
+
+Procedure Name:	sp_r_advanced_stats_tackle_probability
+Author:			Jeremy Parks
+Creation Date:	6/28/2017
+Description:       
+
+
+	This program is to calculate the tackle probability for every player on a given play.
+
+	1) Import the Tackle Probability View from Analytics database
+	2) Load the Tackle Probability Model that was build in another program
+	3) Predict values
+	4) Create a new table in the database with the tackle probability values
+	
+			
+Input Parameters:
+	None
+	
+Output Parameters:
+	None 
+
+Modifications:
+Date         SE           Description
+
+**********************************************************************************/
+
+BEGIN 
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the R select statement so you can pull only the seasons you want to run.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @vSQL NVARCHAR(250)
+SET @vSQL = 'SELECT * FROM dbo.r_input_tackle_probability WHERE season >= ' + CAST(@iSeason AS NVARCHAR(4))
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Remove all the tackle probabilities from the current season so you don't get dupes on the re-write.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DELETE FROM r_output_tackle_probability
+WHERE season >= @iSeason
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Submit the R job to R services.
+			    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+INSERT INTO r_output_tackle_probability
+
+EXECUTE sp_execute_external_script 
+@language = N'R',
+@script = N'
+#######################################################################################################################
+#######################################################################################################################
+
+# This program is to calculate the tackle probability for every player on a given play.
+
+# 1) Import the Tackle Probability View from Analytics database
+# 2) Load the Tackle Probability Model that was build in another program
+# 3) Predict values
+# 4) Create a new table in the database with the tackle probability values
+
+#######################################################################################################################
+#######################################################################################################################
+
+
+#######################################################################################################################
+#  Library Loading
+#######################################################################################################################
+
+# Load the necessary libraries
+library(dplyr)
+
+#######################################################################################################################
+# Variable Creation
+#######################################################################################################################
+
+
+#######################################################################################################################
+# Filer Data
+#######################################################################################################################
+
+data_to_model <- filter(data_to_model, season >= 2013 
+                        & exclude_from_tackle_model == 0
+                        )
+
+data_to_model <- na.omit(data_to_model)
+
+#######################################################################################################################
+# Load the previously saved best model
+#######################################################################################################################
+
+load(file="R:\\model\\tackle_probability_model_overall")
+
+
+#######################################################################################################################
+# Predict the new data
+#######################################################################################################################
+
+predictions <- predict(model, data_to_model, type="prob")
+data_to_model$tackle_probability <- predictions$YES
+
+
+#######################################################################################################################
+# Write the new data back into an SQL table
+#######################################################################################################################
+
+#Only take the pff_pp_id and tackle_probability columns
+for_sql <- data_to_model %>% select(pff_pp_id, tackle_probability, season, week_adjusted)
+',
+@input_data_1 = @vSQL,
+@input_data_1_name = N'data_to_model',
+@output_data_1_name = N'for_sql '
+/*
+-- For testing -- Not needed if inserting directly into the table
+
+WITH RESULT SETS 
+			((pff_pp_id INT,
+            tackle_probability FLOAT,
+			season INT, 
+            week_adjusted INT
+			))
+
+*/
+
+--r_output_tackle_probability
+
+
+END
+
+GO
+
+
