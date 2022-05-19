@@ -6,17 +6,17 @@
 
 Procedure Name:	stage_player_contracts
 Author:			Corey Krawiec
-Creation Date:	6/3/2016
+Creation Date:	06/03/2016
 Description:       
 
 	This program is for creating new Player Contract tables
 
 	1)	Create a transactions table that includes nfl club ids and flags disapproved contracts
 	2)	Find voided contract years and remove them to get real contract money
+	3)	Create basic contract summary table and add in a running 'true extension' count
+	4)  Adjust contracts for 5th year options that are picked up.
 		
-Updates:
-	1)  v2 (11/24/2017) - finds contract with voided years and takes those years out
-			
+	
 Input Parameters:
 	None
 	
@@ -24,7 +24,9 @@ Output Parameters:
 	None 
 
 Modifications:
-Date         SE           Description
+Date		SE				Description
+11/24/2017	Corey Krawiec	Finds contract with voided years and takes those years out (v2)
+10/09/2018	Corey Krawiec	Added step to find early money and make sure it is counted for the true value of contracts with voided years
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -66,18 +68,16 @@ Date         SE           Description
 		,Comments2 AS comments_2	
 		,sc.id AS start_club_bane_id
 		,rc.id AS result_club_bane_id
-		,pc.id AS potential_club_bane_id	 
+		,pc.id AS potential_club_bane_id	
+		,potentialClubAbbr 
 	INTO #temp_transactions
 	FROM ProDB.dbo.TransactionTable tt
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs rc
 		ON LTRIM(RTRIM(tt.ResultClubAbbr)) = LTRIM(RTRIM(rc.code))
-		--AND rc.is_disabled = 0
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs sc
 		ON LTRIM(RTRIM(tt.StartClubAbbr)) = LTRIM(RTRIM(sc.code))
-		--AND sc.is_disabled = 0
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
 		ON LTRIM(RTRIM(tt.PotentialClubAbbr)) = LTRIM(RTRIM(pc.code))
-		--AND pc.is_disabled = 0
 	WHERE 1=1
 		AND LeagueType = 'NFL'
 		AND TransStatus = 30
@@ -167,6 +167,72 @@ Date         SE           Description
 	(2) - b
 
 
+	Create a table that notes early cash. Like Flacco in 2012, that cash was really for 2013 but was paid before end of league year.
+
+	TEMP TABLES:
+		#temp_early_cash
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_signing_bonus_lag exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_signing_bonus_lag') IS NOT NULL
+		DROP TABLE #temp_signing_bonus_lag
+
+	SELECT PlayerID AS nfl_player_id
+		  ,cap.Season AS season
+		  ,cap.Season + 1 AS season_to_move_cash_to
+		  ,ClubID AS nfl_club_id
+		  ,LAG(ClubID) OVER (PARTITION BY PlayerID, ClubID ORDER BY cap.Season, COALESCE(ToDate,'12/31/2099')) as nfl_club_id_previous
+		  ,FromDate AS from_date
+		  ,ToDate AS to_date
+		  ,regular_season_end
+		  ,LAG(CashSB_SB) OVER (PARTITION BY PlayerID, ClubID ORDER BY cap.Season, COALESCE(ToDate,'12/31/2099')) as signing_bonus_previous_record
+		  ,CashSB_SB AS signing_bonus
+		  ,LAG(CashSB_Option) OVER (PARTITION BY PlayerID, ClubID ORDER BY cap.Season, COALESCE(ToDate,'12/31/2099')) as option_bonus_previous_record
+		  ,CashSB_Option AS option_bonus
+		  ,LAG(CashLTBE_RB) OVER (PARTITION BY PlayerID, ClubID ORDER BY cap.Season, COALESCE(ToDate,'12/31/2099')) as roster_bonus_previous_record
+		  ,CashLTBE_RB AS roster_bonus
+	INTO #temp_signing_bonus_lag
+	FROM ClubDB.dbo.CapRollup cap
+	INNER JOIN Analytics.dbo.map_nfl_league_year_dates ld
+		ON cap.Season = ld.season
+	WHERE cap.Season >= 2011
+	ORDER BY PlayerID
+		,Season
+
+	-- Check if #temp_early_cash exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_early_cash') IS NOT NULL
+		DROP TABLE #temp_early_cash
+
+	SELECT nfl_player_id
+		  ,season
+		  ,season_to_move_cash_to
+		  ,nfl_club_id
+		  ,from_date
+		  ,to_date
+		  ,signing_bonus - signing_bonus_previous_record AS early_cash_signing_bonus
+		  ,option_bonus - option_bonus_previous_record AS early_cash_option_bonus
+		  ,roster_bonus - roster_bonus_previous_record AS early_cash_roster_bonus
+	INTO #temp_early_cash
+	FROM #temp_signing_bonus_lag
+	WHERE from_date >= regular_season_end
+		AND ((signing_bonus - signing_bonus_previous_record) > 0
+			OR (option_bonus - option_bonus_previous_record) > 0
+			OR (roster_bonus - roster_bonus_previous_record) > 0)
+		AND nfl_club_id_previous = nfl_club_id
+
+ /*
+ SELECT *
+ FROM #temp_early_cash
+ WHERE nfl_player_id = 26250
+ ORDER BY nfl_club_id, Season, COALESCE(To_Date,'12/31/2099')
+ */
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(2) - c
+
+
 	Join the voided seasons to the cap and contract data
 
 	OUTPUT TABLES:
@@ -181,27 +247,33 @@ Date         SE           Description
 	SELECT ContractID AS nfl_contract_id
 		,cap.Season AS season
 		,RANK() OVER (PARTITION BY con.ContractID ORDER BY cap.season) AS contract_season
-		,cap.Cash AS cash
+		,cap.Cash + ISNULL(early_cash_signing_bonus,0) + ISNULL(early_cash_option_bonus,0) + ISNULL(early_cash_roster_bonus,0) AS cash
 		,cap.CashP5 AS p5
-		,cap.CashSB_SB AS signing_bonus
-		,cap.CashSB_Option AS option_bonus
-		,cap.CashLTBE_RB AS roster_bonus
+		,cap.CashSB_SB + ISNULL(early_cash_signing_bonus,0) AS signing_bonus
+		,cap.CashSB_Option + ISNULL(early_cash_option_bonus,0) AS option_bonus
+		,cap.CashLTBE_RB + ISNULL(early_cash_roster_bonus,0) AS roster_bonus
 	INTO #temp_cap_contract_to_void
 	FROM ClubDB.dbo.CapRollup cap
 	INNER JOIN ClubDB.dbo.ContractRep con
 		ON cap.PlayerID = con.PlayerID
 		AND cap.FromDate = con.SignDate
 		AND cap.Season BETWEEN con.FirstContractYear AND con.LastContractYear
+	LEFT JOIN #temp_early_cash ec
+		ON cap.PlayerID = ec.nfl_player_id
+		AND cap.ClubID = ec.nfl_club_id
+		AND cap.FromDate = ec.from_date
+		AND cap.Season = ec.season_to_move_cash_to
 
 /*
 select *
 from #temp_cap_contract_to_void
-where nfl_contract_id = 210111
+where nfl_contract_id = 227413
 */
+
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-	(2) - c
+	(2) - d
 
 	Create a table to sum up the real money of contracts with void seasons.
 
@@ -234,7 +306,7 @@ where nfl_contract_id = 210111
 /*
 select *
 from #temp_contracts_cash_exclude_voids
-where nfl_contract_id = 220878
+where nfl_contract_id = 227396
 */
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -242,7 +314,11 @@ where nfl_contract_id = 220878
 	(3) - a
 
 
-	Create a temp version of the league's contract table that fixes the contracts with void years
+	Create a temp version of the league's contract table that fixes the contracts with void years.
+
+	Note even though the vairable actual_last_contract_year would make more sense to be calculated in the
+	next step with all the others like it, you need it for the generation of the variable new_money_first_contract_year
+	so you do it in this step instead.
 
 	OUTPUT TABLES:
 	#temp_contract_rep
@@ -264,6 +340,9 @@ where nfl_contract_id = 220878
 		,CASE WHEN ev.total_signing_bonus IS NOT NULL THEN ev.total_signing_bonus ELSE TotalSigningBonus END AS total_signing_bonus
 		,CASE WHEN ev.total_option_bonus IS NOT NULL THEN ev.total_option_bonus ELSE TotalOption END AS total_option_bonus
 		,CASE WHEN ev.total_roster_bonus IS NOT NULL THEN ev.total_roster_bonus ELSE TotalRosterBonus END AS total_roster_bonus
+		,CASE WHEN COALESCE(LEAD(FirstContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) - 1,last_contract_year) >= FirstContractYear THEN COALESCE(LEAD(FirstContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate)- 1,last_contract_year) 
+			ELSE COALESCE(LEAD(FirstContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate),last_contract_year) 
+		END AS actual_last_contract_year
 	INTO #temp_contract_rep
 	FROM ClubDb.dbo.ContractRep cr
 	LEFT JOIN #temp_contracts_cash_exclude_voids ev
@@ -325,11 +404,14 @@ FROM #temp_contract_rep
 		,LEAD(SignDate) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS signing_date_next_contract
 		,LTRIM(RTRIM(SigningType)) AS signing_type
 		,CASE WHEN LTRIM(RTRIM(SigningType)) IN ('Selection List Signing','Undrafted Rookie Signing') THEN 1 ELSE 0 END AS rookie_contract
-		,CASE WHEN LAG(last_contract_year,1) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) < FirstContractYear THEN 1 ELSE 0 END AS open_market_contract
+		,CASE WHEN ISNULL(LAG(last_contract_year,1) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate),0) < FirstContractYear THEN 0 
+			WHEN LTRIM(RTRIM(SigningType)) NOT IN ('Renegotiation/Extension') THEN 0
+			ELSE 1
+		END AS true_extension
 		,FirstContractYear AS first_contract_year
-		,COALESCE(LAG(last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) + 1,FirstContractYear) AS new_money_first_contract_year
+		,COALESCE(LAG(actual_last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) + 1,FirstContractYear) AS new_money_first_contract_year
 		,last_contract_year
-		,COALESCE(LEAD(FirstContractYear) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate)- 1,last_contract_year) AS actual_last_contract_year
+		,actual_last_contract_year
 		,last_contract_year - FirstContractYear + 1 AS total_years
 		,total_package_amount
 		,total_package_amount / (last_contract_year - FirstContractYear + 1) AS total_average_per_year
@@ -362,36 +444,74 @@ SELECT *
 FROM #temp_player_contract_summary_basic
 WHERE player = 'Roethlisberger, Ben'
 ORDER BY signing_date
-
-maybe change it to "true extension" rather than open market extension so open market extensions are 0
-then find your 0's and save the start date and end date into a temp table
-then count by values in between those dates?
-
---You want to change the below so it only counts extensions of the same "deal"
---So for Flacco, his first "extension" was on the open market so it shouldn't be counted
---For Brees, he did one extension but then was franchised, so his extension count should start back at 0
-
-,(SELECT SUM(CASE WHEN LTRIM(RTRIM(SigningType)) = 'Renegotiation/Extension' THEN 1 ELSE 0 END) 
-	FROM ClubDb.dbo.ContractRep cr2
-	WHERE cr.PlayerID = cr2.PlayerID
-		AND cr.ClubID = cr2.ClubID
-		AND cr.SignDate >= cr2.SignDate) 
-AS extension_count 
 */
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create the table that gets you the 5th year option amount so you can add it in to 
-the yearly compensation if it is picked up for a given player.
+	(3) - c
 
-OUTPUT TABLES:
-#temp_fifth_year_option
+
+	Count up how many extensions a player has on each 'deal' (can have multiple teams on the same deal). This is kind
+	of complicated, so it needs multiple steps. First, you need to create a temp table that notes when the last non true
+	extension was for a player for each given row.  You need the counter to be able to reset to 0 if a player signs a contract
+	that isn't a true extension in the middle, so in the next step you just count the true_extensions going
+	backwards to that date.  
+
+	OUTPUT TABLES:
+	#temp_player_contract_recent_non_extension
+	#temp_player_contract_with_extension_count
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_fifth_year_option exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_fifth_year_option') IS NOT NULL
-	DROP TABLE #temp_fifth_year_option
+	-- Check if #temp_player_contract_recent_non_extension exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_contract_recent_non_extension') IS NOT NULL
+		DROP TABLE #temp_player_contract_recent_non_extension
+
+	SELECT c1.*
+		,(SELECT MAX(signing_date) 
+			FROM #temp_player_contract_summary_basic c2
+			WHERE c2.nfl_player_id = c1.nfl_player_id
+				AND c2.signing_date <= c1.signing_date
+				AND c2.true_extension = 0)
+		AS recent_non_extension
+	INTO #temp_player_contract_recent_non_extension
+	FROM #temp_player_contract_summary_basic c1
+
+
+	-- Check if #temp_player_contract_with_extension_count exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_player_contract_with_extension_count') IS NOT NULL
+		DROP TABLE #temp_player_contract_with_extension_count
+
+	SELECT r1.*
+		,CASE WHEN LTRIM(RTRIM(signing_type)) = 'Renegotiation/Extension' THEN 
+			(SELECT SUM(true_extension) 
+			FROM #temp_player_contract_recent_non_extension r2
+			WHERE r2.nfl_player_id = r1.nfl_player_id
+				AND r2.signing_date <= r1.signing_date
+				AND r2.signing_date >= r1.recent_non_extension
+				)
+		ELSE 0
+		END AS extension_count
+	INTO #temp_player_contract_with_extension_count
+	FROM #temp_player_contract_recent_non_extension r1
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(4) - a
+
+
+	Create the table that gets you the 5th year option amount so you can add it in to 
+	the yearly compensation if it is picked up for a given player.
+
+	OUTPUT TABLES:
+	#temp_fifth_year_option
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_fifth_year_option exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_fifth_year_option') IS NOT NULL
+		DROP TABLE #temp_fifth_year_option
 
 	SELECT DISTINCT ContractRepID
 		,syr.ContractID
@@ -413,34 +533,36 @@ IF OBJECT_ID('tempdb..#temp_fifth_year_option') IS NOT NULL
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create the table that has the yearly Cash Breakdown of contracts. Join in the 
-5th year option amounts where applicable.
+	(4) - b
 
-You include the WHERE clause because sometimes there are "fake" contract years in the
-ContractYearRep table, namely when early cash is paid out (see Joe Flacco). His second
-contract has a row for 2012 in ContractYearRep (because that's when his early cash was
-paid), but the actual contract started in 2013.
+	Create the table that has the yearly Cash Breakdown of contracts. Join in the 
+	5th year option amounts where applicable.
 
-OUTPUT TABLES:
-#temp_contract_year_breakdown
+	You include the WHERE clause because sometimes there are "fake" contract years in the
+	ContractYearRep table, namely when early cash is paid out (see Joe Flacco). His second
+	contract has a row for 2012 in ContractYearRep (because that's when his early cash was
+	paid), but the actual contract started in 2013.
+
+	OUTPUT TABLES:
+	#temp_contract_year_breakdown
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_contract_year_breakdown exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_contract_year_breakdown') IS NOT NULL
-	DROP TABLE #temp_contract_year_breakdown
+	-- Check if #temp_contract_year_breakdown exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_contract_year_breakdown') IS NOT NULL
+		DROP TABLE #temp_contract_year_breakdown
 
 	SELECT cy.ContractRepID AS nfl_contract_rep_id
 		,cy.ContractID AS nfl_contract_id
 		,previous_nfl_contract_rep_id
 		,previous_nfl_contract_id
 		,new_money_first_contract_year
-		,nfl_player_id
+		,cr.nfl_player_id
 		,cy.Season AS season
 		,CASE WHEN fifth_year_option_amount IS NOT NULL THEN fifth_year_option_amount ELSE AnnualFullP5 + AnnualReportingBonus + AnnualRosterBonus END AS annual_compensation
-	INTO #temp_contract_year_breakdown
+	--INTO #temp_contract_year_breakdown
 	FROM ClubDB.dbo.ContractYearRep cy
-	INNER JOIN #temp_player_contract_summary_basic cr
+	INNER JOIN #temp_player_contract_with_extension_count cr
 		ON cy.ContractRepID = cr.nfl_contract_rep_id
 		AND cy.ContractID = cr.nfl_contract_id
 	LEFT JOIN #temp_fifth_year_option fyo
@@ -450,18 +572,19 @@ IF OBJECT_ID('tempdb..#temp_contract_year_breakdown') IS NOT NULL
 	WHERE cy.Season >= first_contract_year 
 
 
+
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the previous contract to the newer contract
+	Join the previous contract to the newer contract
 
-OUTPUT TABLES:
-#temp_contract_year_breakdown_with_prev
+	OUTPUT TABLES:
+	#temp_contract_year_breakdown_with_prev
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_contract_year_breakdown_with_prev exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_contract_year_breakdown_with_prev') IS NOT NULL
-	DROP TABLE #temp_contract_year_breakdown_with_prev
+	-- Check if #temp_contract_year_breakdown_with_prev exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_contract_year_breakdown_with_prev') IS NOT NULL
+		DROP TABLE #temp_contract_year_breakdown_with_prev
 
     SELECT new.nfl_contract_rep_id
 		  ,new.nfl_contract_id
