@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_r_advanced_stats_yards_per_route_regressed]    Script Date: 5/19/2022 11:20:14 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_r_pro_player_per_route_yards]    Script Date: 5/19/2022 11:20:07 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -14,11 +14,14 @@ GO
 
 
 
-ALTER procedure [dbo].[sp_r_advanced_stats_yards_per_route_regressed] (@oReturnCD INT OUTPUT) as
+
+
+
+ALTER procedure [dbo].[sp_r_pro_player_per_route_yards] (@oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
-Procedure Name:	sp_r_advanced_stats_yards_per_route_regressed
+Procedure Name:	sp_r_pro_player_per_route_yards
 Author:			Corey Krawiec
 Creation Date:	09/22/2017
 Description:       
@@ -52,7 +55,7 @@ BEGIN
 
 -- For Testing -- Uncomment the temp table creation and insert into that instead.
 
-create table #r_output_regressed_statistics (nfl_player_id INT,
+create table #bane_pro_player_regressed_stats (nfl_player_id INT,
 			season INT,
             season_type_adjusted  VARCHAR(255),
             statistic_id FLOAT,
@@ -67,8 +70,9 @@ create table #r_output_regressed_statistics (nfl_player_id INT,
 
 
 -- For testing -- Comment out direct insert and insert into test table 
--- insert into #r_output_regressed_statistics 
-insert into r_output_regressed_statistics 
+-- insert into #bane_pro_player_regressed_stats 
+delete from bane_pro_player_regressed_stats where statistic_id = 8
+insert into bane_pro_player_regressed_stats
 -- Submit the R job to R services.
 EXECUTE sp_execute_external_script 
 @language = N'R',
@@ -272,7 +276,7 @@ for_sql <- data_to_regress %>% select(nfl_player_id
 
 ',  
 @input_data_1 = N'SELECT *
-  FROM [dbo].[r_input_stats_receiving]',
+  FROM [dbo].[pro_player_receiving_stats]',
 @input_data_1_name = N'data_to_regress',
 @output_data_1_name = N'for_sql'
 /*
@@ -291,7 +295,7 @@ WITH RESULT SETS
 
 */
 			
---r_output_regressed_statistics
+--bane_pro_player_regressed_stats
 
 
 END
