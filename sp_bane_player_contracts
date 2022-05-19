@@ -4,7 +4,7 @@
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Procedure Name:	stage_player_contracts
+Procedure Name:	analysis_players_contracts
 Author:			Corey Krawiec
 Creation Date:	06/03/2016
 Description:       
@@ -16,6 +16,7 @@ Description:
 	3)	Find real money of all contracts:  account for voids, 5th year options, and early cash payouts
 	4)	Create basic contract summary table and add in a running 'true extension' count
 	5)  Determine the 'new money' in each contract
+	6)  Update the player contract analysis table
 		
 	
 Input Parameters:
@@ -30,6 +31,8 @@ Date		SE				Description
 10/09/2018	Corey Krawiec	Added step to find early money and make sure it is counted for the true value of contracts with voided years (v3)
 10/09/2018	Corey Krawiec	Moved 5th year option to part 2 along with the void years. The new and old money totals need the early cash and voids too. (v4)
 10/24/2018	Corey Krawiec	Started using Cap Details along with transaction table (in separate steps) to flag sign and trades. Create an 'effective club id' variable
+
+10/29/2018	Corey Krawiec	also, if its not an extension (0 or negative new years), new money is the total value
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -590,7 +593,7 @@ where nfl_contract_id = 190580
 	Create a temp version of the league's contract table that fixes the contracts with void years.
 
 	Note even though the vairable actual_last_contract_year would make more sense to be calculated in the
-	next step with all the others like it, you need it for the generation of the variable first_year_of_new_money
+	next step with all the others like it, you need it for the generation of the variable first_new_year
 	so you do it in this step instead.
 
 	Join the effective club id to this table as well. So that sign and trade clubs are fixed for all later steps.
@@ -717,8 +720,11 @@ WHERE PlayerID = 26250
 		,TransID AS nfl_transaction_id
 		,SignDate AS signing_date
 		,LEAD(SignDate) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) AS signing_date_next_contract
-		,LTRIM(RTRIM(SigningType)) AS signing_type
-		,CASE WHEN LTRIM(RTRIM(SigningType)) IN ('Selection List Signing','Undrafted Rookie Signing') THEN 1 ELSE 0 END AS rookie_contract
+		,CASE WHEN LTRIM(RTRIM(SigningType)) = 'Renegotiation/Extension' AND last_contract_year > LAG(last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) THEN 'Extension'
+			WHEN LTRIM(RTRIM(SigningType)) = 'Renegotiation/Extension' THEN 'Renegotiation'
+			ELSE LTRIM(RTRIM(SigningType)) 
+		END AS signing_type
+		,CASE WHEN LTRIM(RTRIM(SigningType)) IN ('Selection List Signing','Undrafted Rookie Signing') THEN 1 ELSE 0 END AS is_rookie_contract
 		,CASE WHEN ISNULL(LAG(last_contract_year,1) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate),0) < FirstContractYear THEN 0 
 			WHEN LTRIM(RTRIM(SigningType)) NOT IN ('Renegotiation/Extension') THEN 0
 			ELSE 1
@@ -726,8 +732,10 @@ WHERE PlayerID = 26250
 		,fifth_year_option_exercised
 		,contract_has_void
 		,FirstContractYear AS first_contract_year
-		,COALESCE(LAG(last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) + 1,FirstContractYear) AS first_year_of_new_money
 		,last_contract_year
+		,CASE WHEN LTRIM(RTRIM(SigningType)) = 'Renegotiation/Extension' AND last_contract_year > LAG(last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) THEN COALESCE(LAG(last_contract_year) OVER (PARTITION BY cr.PlayerID ORDER BY SignDate) + 1,FirstContractYear) 
+			ELSE NULL
+		END AS first_new_year
 		,actual_last_contract_year
 		,last_contract_year - FirstContractYear + 1 AS total_years
 		,CASE WHEN fifth_year_option_exercised = 1 THEN total_package_amount_with_fifth_year ELSE total_package_amount END AS total_package_amount
@@ -839,7 +847,7 @@ ORDER BY signing_date
 		,cv.nfl_contract_id
 		,previous_nfl_contract_rep_id
 		,previous_nfl_contract_id
-		,first_year_of_new_money
+		,first_new_year
 		,ec.nfl_player_id
 		,cv.Season AS season
 		,CASE WHEN vs.nfl_contract_id IS NOT NULL THEN 0
@@ -894,7 +902,7 @@ where PlayerID = 35481
 		,new.previous_nfl_contract_rep_id
 		,new.nfl_contract_id		
 		,new.previous_nfl_contract_id
-		,new.first_year_of_new_money
+		,new.first_new_year
 		,new.nfl_player_id
 		,new.season
 		,ISNULL(new.annual_compensation,0) AS annual_compensation_new
@@ -966,8 +974,8 @@ ORDER BY nfl_contract_id
 
 	SELECT ce.*
 		,CASE WHEN true_extension = 1 THEN ISNULL(total_compensation_new,0) - ISNULL(total_compensation_old,0) ELSE NULL END AS new_money
-		,CASE WHEN true_extension = 1 THEN (last_contract_year - first_year_of_new_money + 1) ELSE NULL END AS new_money_years
-		,CASE WHEN true_extension = 1 THEN (ISNULL(total_compensation_new,0) - ISNULL(total_compensation_old,0)) / NULLIF(last_contract_year - first_year_of_new_money + 1,0) ELSE NULL END AS new_money_average_per_year
+		,CASE WHEN true_extension = 1 THEN (last_contract_year - first_new_year + 1) ELSE NULL END AS new_money_years
+		,CASE WHEN true_extension = 1 THEN (ISNULL(total_compensation_new,0) - ISNULL(total_compensation_old,0)) / NULLIF(last_contract_year - first_new_year + 1,0) ELSE NULL END AS new_money_average_per_year
 	INTO #temp_player_contract_summary
 	FROM #temp_player_contract_with_extension_count ce
 	LEFT JOIN #temp_contract_compensation_old_new con
@@ -977,6 +985,99 @@ ORDER BY nfl_contract_id
 /*
 SELECT *
 FROM #temp_player_contract_summary
-WHERE player = 'Gronkowski, Rob'
+WHERE player = 'Manning, Eli'
 ORDER BY nfl_contract_id
 */
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(6)
+
+
+	Create the players contract analysis table.
+
+	ANALYSIS TABLES:
+	Analytics.dbo.analysis_players_contracts
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	TRUNCATE TABLE Analytics.dbo.analysis_players_contracts
+	
+	INSERT INTO Analytics.dbo.analysis_players_contracts
+		(nfl_contract_id
+		,previous_nfl_contract_id
+		,nfl_player_id
+		,player
+		,nfl_agent_id
+		,nfl_club_id
+		,nfl_transaction_id
+		,signing_date
+		,signing_type
+		,first_contract_year
+		,last_contract_year
+		,total_years
+		,true_package_amount
+		,true_average_per_year
+		,total_package_amount
+		,total_average_per_year
+		,three_year_compensation
+		,three_year_average_per_year
+		,total_p5
+		,p5_average_per_year
+		,total_signing_bonus
+		,total_roster_bonus
+		,total_option_bonus
+		,total_reporting_bonus
+		,total_incentives
+		,total_offseason_bonus
+		,effective_contract
+		,most_recent_contract
+		,first_new_year
+		,actual_last_contract_year
+		,contract_has_void
+		,is_rookie_contract
+		,is_minimum_salary_benefit_contract
+		,contract_record_count
+		,same_season_contract_count
+		,true_extension
+		,fifth_year_option_exercised
+		)
+	SELECT nfl_contract_id
+		,previous_nfl_contract_id
+		,nfl_player_id
+		,player
+		,nfl_agent_id
+		,nfl_club_id
+		,nfl_transaction_id
+		,signing_date
+		,signing_type
+		,first_contract_year
+		,last_contract_year
+		,total_years
+		,CASE WHEN UPPER(signing_type) = 'EXTENSION' AND true_extension = 1 THEN new_money ELSE total_package_amount END AS true_package_amount
+		,CASE WHEN UPPER(signing_type) = 'EXTENSION' AND true_extension = 1 THEN new_money_average_per_year ELSE total_average_per_year END AS true_average_per_year
+		,total_package_amount
+		,total_average_per_year
+		,three_year_compensation
+		,three_year_average_per_year
+		,total_p5
+		,p5_average_per_year
+		,total_signing_bonus
+		,total_roster_bonus
+		,total_option_bonus
+		,total_reporting_bonus
+		,total_incentives
+		,total_offseason_bonus
+		,effective_contract
+		,most_recent_contract
+		,first_new_year
+		,actual_last_contract_year
+		,contract_has_void
+		,is_rookie_contract
+		,is_minimum_salary_benefit_contract
+		,contract_record_count
+		,same_season_contract_count
+		,true_extension
+		,fifth_year_option_exercised
+	FROM #temp_player_contract_summary
