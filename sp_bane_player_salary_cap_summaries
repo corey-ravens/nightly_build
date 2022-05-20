@@ -1,7 +1,7 @@
 USE [Analytics]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 12/17/2016 11:18:35 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 8/19/2017 11:27:36 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -11,12 +11,7 @@ GO
 
 
 
-
-
-
-
-
-ALTER PROCEDURE [dbo].[sp_analysis_players_salary_cap] (@oReturnCD INT OUTPUT) as
+ALTER PROCEDURE [dbo].[sp_analysis_players_salary_cap] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
@@ -40,6 +35,7 @@ v14 added "already accelerated dead money" to "dead money"
 v15 changes the order or variables and cleans up a bit
 v16 (12/6/2016) adds in retired players for dead money flag
 v17 (12/17/2016) adds the "active row" flag so you know which row to use for display
+v18 (08/18/2017) changes the where clause in the final step so it only gives rows where the cap season is >= the min season on the player's effective contract
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -440,9 +436,6 @@ WHERE nfl_player_id = 37078
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	DECLARE @current_season INT
-		SELECT @current_season = (SELECT season FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() BETWEEN league_year_start AND league_year_end)
-
 	TRUNCATE TABLE Analytics.dbo.analysis_players_salary_cap
 
 	INSERT INTO Analytics.dbo.analysis_players_salary_cap
@@ -483,33 +476,33 @@ WHERE nfl_player_id = 37078
 	      ,ClubID AS nfl_club_id
 		  ,cap.Season AS season
 		  ,CASE WHEN CapAmt > 0 AND Cash = 0 AND cap.season >= 2002 AND Para5 = 0 THEN 1 
-				WHEN cap.season >= @current_season AND cap.ClubID <> (SELECT ClubID FROM ClubDB.dbo.PlayerExtract pe WHERE pe.PlayerID = cap.PlayerID) THEN 1
+				WHEN cap.season >= @iSeason AND cap.ClubID <> (SELECT ClubID FROM ClubDB.dbo.PlayerExtract pe WHERE pe.PlayerID = cap.PlayerID) THEN 1
 				WHEN cap.season > COALESCE(last_season_before_retirement,99999) THEN 1
 				WHEN (CapAmt + Para5 + SB + LTBE + PotAccel) = 0 THEN 1
 				ELSE 0
 		   END AS dead_money_flag
-		  ,CapAmt AS cap_amount
-		  ,Cash 
+		  ,COALESCE(CapAmt,0) AS cap_amount
+		  ,COALESCE(Cash,0) 
 			+ COALESCE(eca.early_cash_signing_bonus,0) - COALESCE(ecs.early_cash_signing_bonus,0)
 			+ COALESCE(eca.early_cash_roster_bonus,0) - COALESCE(ecs.early_cash_roster_bonus,0)
 			+ COALESCE(eca.early_cash_option_bonus,0) - COALESCE(ecs.early_cash_option_bonus,0)
 		   AS cash_amount
-		  ,Para5 AS cap_paragraph_5
-		  ,CashP5 AS cash_paragraph_5
-		  ,SB AS cap_signing_bonus
-		  ,CashSB_SB AS cash_signing_bonus
-		  ,LTBE AS cap_likely_to_be_earned
-		  ,CashLTBE_OffSeason AS cash_likely_to_be_earned_offseason
-		  ,CashLTBE_Other AS cash_likely_to_be_earned_other
-		  ,CashLTBE_RB AS cash_roster_bonus
-		  ,CashSB_Option AS cash_option_bonus
-		  ,cap_details_offseason_bonus
-		  ,cap_details_option_bonus
-		  ,cap_details_roster_bonus
-		  ,Misc AS cap_miscellaneous
-		  ,PotAccel AS cap_potential_acceleration
-		  ,FullP5 AS cap_full_paragraph_5
-		  ,Top51Delta AS cap_top_51_delta
+		  ,COALESCE(Para5,0) AS cap_paragraph_5
+		  ,COALESCE(CashP5,0) AS cash_paragraph_5
+		  ,COALESCE(SB,0) AS cap_signing_bonus
+		  ,COALESCE(CashSB_SB,0) AS cash_signing_bonus
+		  ,COALESCE(LTBE,0) AS cap_likely_to_be_earned
+		  ,COALESCE(CashLTBE_OffSeason,0) AS cash_likely_to_be_earned_offseason
+		  ,COALESCE(CashLTBE_Other,0) AS cash_likely_to_be_earned_other
+		  ,COALESCE(CashLTBE_RB,0) AS cash_roster_bonus
+		  ,COALESCE(CashSB_Option,0) AS cash_option_bonus
+		  ,COALESCE(cap_details_offseason_bonus,0) AS cap_details_offseason_bonus
+		  ,COALESCE(cap_details_option_bonus,0) AS cap_details_option_bonus
+		  ,COALESCE(cap_details_roster_bonus,0) AS cap_details_roster_bonus
+		  ,COALESCE(Misc,0) AS cap_miscellaneous
+		  ,COALESCE(PotAccel,0) AS cap_potential_acceleration
+		  ,COALESCE(FullP5,0) AS cap_full_paragraph_5
+		  ,COALESCE(Top51Delta,0) AS cap_top_51_delta
 		  ,cap.FromDate AS from_date
 		  ,cap.ToDate AS to_date
 		  ,CASE WHEN CashSB_Option > 0 THEN SB 
@@ -518,13 +511,13 @@ WHERE nfl_player_id = 37078
 					+ COALESCE(cap_already_earned,0) 
 					- COALESCE(cap_details_option_bonus,0)
 					+ COALESCE(already_accelerated_dead_money,0)
-					+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END									
+					+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END									
 				ELSE SB 
 					+ PotAccel 
 					+ COALESCE(future_guaranteed_money,0)
 					+ COALESCE(cap_already_earned,0)
 					+ COALESCE(already_accelerated_dead_money,0)
-					+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+					+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 		   END AS dead_cap
 		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB 
 							+ PotAccel 
@@ -532,43 +525,43 @@ WHERE nfl_player_id = 37078
 							+ COALESCE(cap_already_earned,0) 
 							- COALESCE(cap_details_option_bonus,0)
 							+ COALESCE(already_accelerated_dead_money,0)
-							+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+							+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 						  ELSE SB 
 							+ PotAccel
 							+ COALESCE(future_guaranteed_money,0)
 							+ COALESCE(cap_already_earned,0)
 							+ COALESCE(already_accelerated_dead_money,0)
-							+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+							+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 					  END)
 		   AS cap_savings
 		  ,SB 
 			+ COALESCE(future_guaranteed_money,0)
 			+ COALESCE(cap_already_earned,0)
 			+ COALESCE(already_accelerated_dead_money,0)
-			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+			+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 		   AS dead_cap_post_june_1
 		  ,CapAmt 
 			- (SB 
 			+ COALESCE(future_guaranteed_money,0)
 			+ COALESCE(cap_already_earned,0)
 			+ COALESCE(already_accelerated_dead_money,0)
-			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END)
+			+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END)
 		   AS cap_savings_post_june_1
 		  ,SB
 			+ PotAccel
 			+ COALESCE(cap_already_earned,0)
 			+ COALESCE(already_accelerated_dead_money,0)
-			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END 
+			+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END 
 		   AS dead_cap_trade
 		  ,CapAmt 
 			- (SB
 			+ PotAccel
 			+ COALESCE(cap_already_earned,0)
 			+ COALESCE(already_accelerated_dead_money,0)
-			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) 
+			+ CASE WHEN cap.season = @iSeason AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) 
 		   AS cap_savings_trade
-		  ,CASE WHEN cap.Season >= @current_season THEN CASE WHEN cap.ToDate IS NULL THEN 1 ELSE 0 END
-				ELSE active_row
+  		  ,CASE WHEN cap.Season > @iSeason OR (cap.Season = @iSeason AND MONTH(GETDATE()) >= 4) THEN CASE WHEN cap.ToDate IS NULL AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0 THEN 1 ELSE 0 END
+				ELSE CASE WHEN (CapAmt + Para5 + SB + LTBE + PotAccel) = 0 THEN 0 ELSE COALESCE(act.active_row,0) END --Coalesce to 0 for players who have a row in the table for a previous/current season with a from date after Jan 1, cause active row is null for them
 		   END AS active_row
 	FROM ClubDB.dbo.CapRollup cap
 	INNER JOIN Analytics.dbo.map_nfl_league_year_dates da
@@ -618,7 +611,8 @@ WHERE nfl_player_id = 37078
 	    AND act.season = cap.Season
 	    AND act.from_date = cap.FromDate
 	WHERE 1=1
-		AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
+		AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep cr WHERE EffectiveContract = 1 AND cr.PlayerID = cap.PlayerID)
+		--AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 		--AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
 	   --AND cap.ToDate IS NULL
 	ORDER BY PlayerID
@@ -634,6 +628,10 @@ WHERE nfl_player_id = 37078
 		RETURN @oReturnCD  
 
 END
+
+
+
+
 
 
 
