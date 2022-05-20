@@ -1,12 +1,17 @@
 USE [Analytics]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 8/19/2017 11:27:36 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 10/1/2018 2:08:58 PM ******/
 SET ANSI_NULLS ON
 GO
 
 SET QUOTED_IDENTIFIER ON
 GO
+
+
+
+
+
 
 
 
@@ -36,6 +41,7 @@ v15 changes the order or variables and cleans up a bit
 v16 (12/6/2016) adds in retired players for dead money flag
 v17 (12/17/2016) adds the "active row" flag so you know which row to use for display
 v18 (08/18/2017) changes the where clause in the final step so it only gives rows where the cap season is >= the min season on the player's effective contract
+v19 (10/01/2018) changes the where clause so that dead money years show up even when a player is not under contract
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -568,6 +574,7 @@ WHERE nfl_player_id = 37078
 		ON cap.season = da.season
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON cap.PlayerID = pl.nfl_id
+		AND pl.is_deleted = 0
 	LEFT JOIN #temp_cap_details cd
 		ON cd.nfl_player_id = cap.PlayerID
 		AND cd.Season = cap.Season
