@@ -1,7 +1,7 @@
 USE [Analytics]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 12/17/2016 11:04:08 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 12/17/2016 11:18:35 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -39,6 +39,7 @@ v13 tried to use "earned" and "guaranteed" to get future dead money.
 v14 added "already accelerated dead money" to "dead money"
 v15 changes the order or variables and cleans up a bit
 v16 (12/6/2016) adds in retired players for dead money flag
+v17 (12/17/2016) adds the "active row" flag so you know which row to use for display
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -381,6 +382,43 @@ WHERE nfl_player_id = 37078
 	FROM #temp_last_retirement_filed
 	GROUP BY nfl_player_id
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	Create a table to note which is the "active" row to display.
+
+	Cap Hits for the season "freeze" on January 1, so for previous seasons take the from_date closest to
+	but not greater than Jan 1.
+
+	TEMP TABLES:
+		#temp_active_cap_row_prev_seasons
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_cap_rollup_with_jan_1 exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_cap_rollup_with_jan_1') IS NOT NULL
+		DROP TABLE #temp_cap_rollup_with_jan_1
+
+	SELECT PlayerID AS nfl_player_id
+	    ,ClubID AS nfl_club_id
+		,Season AS season
+		,FromDate AS from_date
+		,caprollupid
+		,DATEDIFF(DD,FromDate,CONCAT('01/01/',Season + 1)) AS days_from_january_1
+	INTO #temp_cap_rollup_with_jan_1
+	FROM ClubDB.dbo.CapRollup
+	WHERE DATEDIFF(DD,FromDate,CONCAT('01/01/',Season + 1)) >= 0
+
+
+	-- Check if #temp_active_cap_row_prev_seasons exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_active_cap_row_prev_seasons') IS NOT NULL
+		DROP TABLE #temp_active_cap_row_prev_seasons
+
+	SELECT *
+		,CASE WHEN RANK() OVER (PARTITION BY nfl_player_id, nfl_club_id, season ORDER BY days_from_january_1, caprollupid) = 1 THEN 1 ELSE 0 END AS active_row
+	INTO #temp_active_cap_row_prev_seasons
+	FROM #temp_cap_rollup_with_jan_1
+
 	
 	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -438,7 +476,8 @@ WHERE nfl_player_id = 37078
 		  ,dead_cap_post_june_1
 		  ,cap_savings_post_june_1
 		  ,dead_cap_trade
-		  ,cap_savings_trade)	
+		  ,cap_savings_trade
+		  ,active_row)	
 	SELECT PlayerID AS nfl_player_id
 		  ,CONCAT(last_name,', ',goes_by) AS player
 	      ,ClubID AS nfl_club_id
@@ -528,6 +567,9 @@ WHERE nfl_player_id = 37078
 			+ COALESCE(already_accelerated_dead_money,0)
 			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) 
 		   AS cap_savings_trade
+		  ,CASE WHEN cap.Season >= @current_season THEN CASE WHEN cap.ToDate IS NULL THEN 1 ELSE 0 END
+				ELSE active_row
+		   END AS active_row
 	FROM ClubDB.dbo.CapRollup cap
 	INNER JOIN Analytics.dbo.map_nfl_league_year_dates da
 		ON cap.season = da.season
@@ -570,6 +612,11 @@ WHERE nfl_player_id = 37078
 		AND cap.FromDate < COALESCE(aa.to_date,'12/31/2099')
 	LEFT JOIN #temp_last_season_before_retirement ret
 		ON ret.nfl_player_id = cap.PlayerID
+	LEFT JOIN #temp_active_cap_row_prev_seasons act
+		ON act.nfl_player_id = cap.PlayerID
+	    AND act.nfl_club_id = cap.ClubID
+	    AND act.season = cap.Season
+	    AND act.from_date = cap.FromDate
 	WHERE 1=1
 		AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 		--AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
