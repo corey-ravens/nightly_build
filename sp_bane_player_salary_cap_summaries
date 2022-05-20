@@ -15,6 +15,7 @@ v11 takes out already paid future guaranteed money
 v12 adds in already paid roster bonus.
 v13 tried to use "earned" and "guaranteed" to get future dead money.
 v14 added "already accelerated dead money" to "dead money"
+v15 changes the order or variables and cleans up a bit
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -322,17 +323,47 @@ year, that bonus has likely already been paid, so it would be dead money.  May n
 well for now. You also subtract out the "already guaranteed" roster bonus to avoid double counting.
 
 OUTPUT TABLES:
-#temp_cap_hits
+stage_players_salary_cap
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 DECLARE @current_season INT
 SELECT @current_season = (SELECT season FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() BETWEEN league_year_start AND league_year_end)
 
--- Check if #temp_cap_hits exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
-	DROP TABLE #temp_cap_hits
+TRUNCATE TABLE Analytics.dbo.stage_players_salary_cap
 
+INSERT INTO Analytics.dbo.stage_players_salary_cap
+		  (nfl_player_id
+		  ,player
+	      ,nfl_club_id
+		  ,season
+		  ,dead_money_flag
+		  ,cap_amount
+		  ,cash_amount
+		  ,cap_paragraph_5
+		  ,cash_paragraph_5
+		  ,cap_signing_bonus
+		  ,cash_signing_bonus
+		  ,cap_likely_to_be_earned
+		  ,cash_likely_to_be_earned_offseason
+		  ,cash_likely_to_be_earned_other
+		  ,cash_roster_bonus
+		  ,cash_option_bonus
+		  ,cap_details_offseason_bonus
+		  ,cap_details_option_bonus
+		  ,cap_details_roster_bonus
+		  ,cap_miscellaneous
+		  ,cap_potential_acceleration
+		  ,cap_full_paragraph_5
+		  ,cap_top_51_delta
+		  ,from_date
+		  ,to_date
+		  ,dead_cap
+		  ,cap_savings
+		  ,dead_cap_post_june_1
+		  ,cap_savings_post_june_1
+		  ,dead_cap_trade
+		  ,cap_savings_trade)	
     SELECT PlayerID AS nfl_player_id
 		  ,CONCAT(last_name,', ',goes_by) AS player
 	      ,ClubID AS nfl_club_id
@@ -359,10 +390,12 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 		  ,cap_details_offseason_bonus
 		  ,cap_details_option_bonus
 		  ,cap_details_roster_bonus
-		  ,SB
-		  ,PotAccel
-		  ,COALESCE(future_guaranteed_money,0) as fgm
-		  ,COALESCE(cap_already_earned,0) as cae		  
+		  ,Misc AS cap_miscellaneous
+		  ,PotAccel AS cap_potential_acceleration
+		  ,FullP5 AS cap_full_paragraph_5
+		  ,Top51Delta AS cap_top_51_delta
+		  ,cap.FromDate AS from_date
+		  ,cap.ToDate AS to_date
 		  ,CASE WHEN CashSB_Option > 0 THEN SB 
 					+ PotAccel 
 					+ COALESCE(future_guaranteed_money,0) 
@@ -418,14 +451,6 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 			+ COALESCE(already_accelerated_dead_money,0)
 			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) 
 		   AS cap_savings_trade
-		  ,Misc AS cap_miscellaneous
-		  ,PotAccel AS cap_potential_acceleration
-		  ,FullP5 AS cap_full_paragraph_5
-		  ,Top51Delta AS cap_top_51_delta
-		  ,cap.FromDate AS cap_start_date
-		  ,cap.ToDate AS cap_end_date
-		  ,CASE WHEN COALESCE(cap.ToDate,'12/31/2088') <= da.regular_season_end THEN 1 ELSE 0 END AS cap_in_season_date_range
-	  INTO #temp_cap_hits
       FROM ClubDB.dbo.CapRollup cap
 INNER JOIN Analytics.dbo.map_nfl_league_year_dates da
 		ON cap.season = da.season
@@ -475,9 +500,5 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 		  ,season
 		  ,cap.FromDate
 
-/*
-SELECT *
-FROM #temp_cap_hits ch1
-WHERE cap_end_date IS NULL
-ORDER BY nfl_player_id, season, nfl_club_id, cap_start_date
-*/
+-- Rebuild the index
+	ALTER INDEX ix_stage_players_salary_cap ON stage_players_salary_cap REBUILD WITH (SORT_IN_TEMPDB = OFF, ONLINE = ON)
