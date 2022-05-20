@@ -1,7 +1,7 @@
-USE [Analytics]
+USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 8/25/2019 8:59:46 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap_OLD]    Script Date: 3/26/2020 2:21:45 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -13,7 +13,13 @@ GO
 
 
 
-ALTER PROCEDURE [dbo].[sp_analysis_players_salary_cap] (@iSeason INT, @oReturnCD INT OUTPUT) as
+
+
+
+
+
+
+ALTER PROCEDURE [dbo].[sp_analysis_players_salary_cap_OLD] (@iSeason INT, @oReturnCD INT OUTPUT) as
 
 /*********************************************************************************
 
@@ -55,7 +61,7 @@ v15			Corey Krawiec	changes the order or variables and cleans up a bit
 12/06/2016	Corey Krawiec	adds in retired players for dead money flag (v16)
 12/17/2016	Corey Krawiec	adds the "active row" flag so you know which row to use for display (v17)
 08/18/2017	Corey Krawiec	changes the where clause in the final step so it only gives rows where the cap season is >= the min season on the player's effective contract (v18)
-08/25/2019	Corey Krawiec	adds a step to sum up when multiple bonuses (like roster bonuses) are paid on the same day.
+08/25/2019	Corey Krawiec	updates the assumed retirement table to exclue players who come back
 
 **********************************************************************************/
 
@@ -134,7 +140,7 @@ begin
 		  ,CashLTBE_RB AS roster_bonus
 	INTO #temp_signing_bonus_lag
 	FROM ClubDB.dbo.CapRollup cap
-	INNER JOIN Analytics.dbo.map_nfl_league_year_dates ld
+	INNER JOIN map_nfl_league_year_dates ld
 		ON cap.Season = ld.season
 	WHERE cap.Season >= 2011
 	ORDER BY PlayerID
@@ -340,33 +346,95 @@ WHERE nfl_player_id = 37078
 
 	Create a table that notes the last season a player played before retiring.
 
+	First do a three step process to find "assumed retirements" where you find if someone has been a free agent for 500 days, then look to see if they were reactivated after
+	a hiatus and if not, assume retirement.  Append that to a list of players who have filed retirement papers and take the highest season as their retirement season.
+
 	TEMP TABLES:
-		#temp_last_season_before_retirement
+		#temp_fa_500_days -> #temp_fa_500_days_last_active -> #temp_retirement_assumed 
+		#temp_retirement_filed -> #temp_active_after_retiring -> #temp_last_retirement_filed
+		#temp_retirement_assumed + #temp_last_retirement_filed = #temp_last_season_before_retirement
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	-- Check if #temp_last_retirement_filed exists, if it does drop it
-	IF OBJECT_ID('tempdb..#temp_last_retirement_filed') IS NOT NULL
-		DROP TABLE #temp_last_retirement_filed
+	-- Check if #temp_fa_500_days exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_fa_500_days') IS NOT NULL
+		DROP TABLE #temp_fa_500_days
 
 	SELECT nfl_player_id
-		,MIN(season) - 1 AS last_season_before_retirement
-	INTO #temp_last_retirement_filed
-	FROM Analytics.dbo.analysis_players_gameweek_status gs1
-	WHERE status_roster_simple = 'RETIRED'
+		,MIN(season) as last_season_before_retirement
+	INTO #temp_fa_500_days
+	FROM analysis_players_gameweek_status gws
+	WHERE status_roster_simple = 'FREEAGENT'
+		AND DATEDIFF(DD,status_start_date,status_end_date) > 500
 	GROUP BY nfl_player_id
+
+
+	-- Check if #temp_fa_500_days_last_active exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_fa_500_days_last_active') IS NOT NULL
+		DROP TABLE #temp_fa_500_days_last_active
+
+	SELECT gws.nfl_player_id
+		,MIN(season) as last_season_active
+	INTO #temp_fa_500_days_last_active
+	FROM analysis_players_gameweek_status gws
+	INNER JOIN #temp_fa_500_days dy
+		ON gws.nfl_player_id = dy.nfl_player_id
+		AND gws.season > dy.last_season_before_retirement
+	WHERE status_roster_simple = 'ACTIVE'
+	GROUP BY gws.nfl_player_id
 
 	-- Check if #temp_retirement_assumed exists, if it does drop it
 	IF OBJECT_ID('tempdb..#temp_retirement_assumed') IS NOT NULL
 		DROP TABLE #temp_retirement_assumed
 
-	SELECT nfl_player_id
-		,MIN(season) as last_season_before_retirement
+	SELECT dy.nfl_player_id
+		,dy.last_season_before_retirement
 	INTO #temp_retirement_assumed
-	FROM Analytics.dbo.analysis_players_gameweek_status gws
-	WHERE status_roster_simple = 'FREEAGENT'
-	AND DATEDIFF(DD,status_start_date,status_end_date) > 500
+	FROM #temp_fa_500_days dy
+	LEFT JOIN #temp_fa_500_days_last_active la
+		ON dy.nfl_player_id = la.nfl_player_id
+	WHERE dy.last_season_before_retirement >= ISNULL(la.last_season_active,0)
+
+
+
+	-- Check if #temp_retirement_filed exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_retirement_filed') IS NOT NULL
+		DROP TABLE #temp_retirement_filed
+
+	SELECT nfl_player_id
+		,MIN(season) - 1 AS last_season_before_retirement
+	INTO #temp_retirement_filed
+	FROM analysis_players_gameweek_status gs1
+	WHERE status_roster_simple = 'RETIRED'
 	GROUP BY nfl_player_id
+
+	-- Check if #temp_active_after_retiring exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_active_after_retiring') IS NOT NULL
+		DROP TABLE #temp_active_after_retiring
+
+	SELECT gws.nfl_player_id
+		,MIN(season) as last_season_active
+	INTO #temp_active_after_retiring
+	FROM analysis_players_gameweek_status gws
+	INNER JOIN #temp_retirement_filed dy
+		ON gws.nfl_player_id = dy.nfl_player_id
+		AND gws.season > dy.last_season_before_retirement
+	WHERE status_roster_simple = 'ACTIVE'
+	GROUP BY gws.nfl_player_id
+
+	-- Check if #temp_last_retirement_filed exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_last_retirement_filed') IS NOT NULL
+		DROP TABLE #temp_last_retirement_filed
+
+	SELECT dy.nfl_player_id
+		,dy.last_season_before_retirement
+	INTO #temp_last_retirement_filed
+	FROM #temp_retirement_filed dy
+	LEFT JOIN #temp_active_after_retiring la
+		ON dy.nfl_player_id = la.nfl_player_id
+	WHERE dy.last_season_before_retirement >= ISNULL(la.last_season_active,0)
+
+
 
 	INSERT INTO #temp_last_retirement_filed
 	SELECT * FROM #temp_retirement_assumed
@@ -439,9 +507,9 @@ WHERE nfl_player_id = 37078
 
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-	TRUNCATE TABLE Analytics.dbo.analysis_players_salary_cap
+	TRUNCATE TABLE analysis_players_salary_cap
 
-	INSERT INTO Analytics.dbo.analysis_players_salary_cap
+	INSERT INTO analysis_players_salary_cap
 		 (nfl_player_id
 		  ,player
 	      ,nfl_club_id
@@ -567,7 +635,7 @@ WHERE nfl_player_id = 37078
 				ELSE CASE WHEN (CapAmt + Para5 + SB + LTBE + PotAccel) = 0 THEN 0 ELSE COALESCE(act.active_row,0) END --Coalesce to 0 for players who have a row in the table for a previous/current season with a from date after Jan 1, cause active row is null for them
 		   END AS active_row
 	FROM ClubDB.dbo.CapRollup cap
-	INNER JOIN Analytics.dbo.map_nfl_league_year_dates da
+	INNER JOIN map_nfl_league_year_dates da
 		ON cap.season = da.season
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON cap.PlayerID = pl.nfl_id
