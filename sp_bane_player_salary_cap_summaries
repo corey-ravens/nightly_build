@@ -9,16 +9,13 @@ Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because
 Ndamukong Suh - dead money off by 10 mil in 2017 - NFL has 10 more mil future guarnateed than OTC has
 Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
 
-v8 includes the offseason workout bonuses in dead money, also changes to ltbe minus already guaranteed money and adds traded dead money
+v9 takes out unpaid option bonus proration from the bonus_acceleration variable.
+
+**But you want future years after the option WOULD HAVE BEEN picked up to go back to not having that option bonus removed from the prorated signing bonus**
 
 **For Cap Casualty, go with the LTBE and dead money as it would be before the league year changes. for example...if a guy was a cap casualty 
 before the 2015 season, his dead money shouldn't be what it was for the end of the 2015 season, it should be what it was as of the day cut..
 ltbe and other bonuses probably weren't paid yet.
-
-Tyrod's isnt a signing bonus, it's an option for past 2017 might want to change that cause dead is actually only 2.85 mil (the prorated 3.4 mil sign bonus form 2016)
-** is that why Sb can have ltbe and roster bonuses in it in the cap details table? maybe that is how you figure out which prorate to not include**
-*** WHERE SectionType = Option and Category = SB THEN it is prorated option bonus - DON'T INCLUDE IN BONUS ACCELERATION UNLESS GUARANTEED ALREADY**
-
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -233,20 +230,73 @@ OUTPUT TABLES:
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
+-- Check if #temp_paid_option exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_paid_option') IS NOT NULL
+	DROP TABLE #temp_paid_option
+
+    SELECT PlayerID
+		  ,ClubID
+		  ,Season
+		  ,SectionID
+		  ,1 AS option_paid
+	  INTO #temp_paid_option
+	  FROM ClubDB.dbo.CapDetails
+	 WHERE ToDate IS NULL
+	   AND Season >= 2011
+	   AND Season <= 2016
+	   AND UPPER(SectionType) = 'OPTION'
+	   AND Category IS NULL
+	   AND CashAmount > 0
+
+
+-- Check if #temp_prorated_option_bonus_not_paid exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_prorated_option_bonus_not_paid') IS NOT NULL
+	DROP TABLE #temp_prorated_option_bonus_not_paid
+
+    SELECT cd.PlayerID
+		  ,cd.ClubID
+		  ,cd.Season
+		  ,CASE WHEN COALESCE(option_paid,0) = 0 THEN CapAmount ELSE 0 END AS prorated_option_bonus_not_paid
+	  INTO #temp_prorated_option_bonus_not_paid
+	  FROM ClubDB.dbo.CapDetails cd
+ LEFT JOIN #temp_paid_option po
+		ON cd.PlayerID = po.PlayerID
+	   AND cd.ClubID = po.ClubID
+	   AND cd.SectionID = po.SectionID
+	 WHERE ToDate IS NULL
+	   AND cd.Season >= 2011
+	   AND UPPER(SectionType) = 'OPTION'
+	   AND UPPER(Category) = 'SB'
+
+
+-- Check if #temp_cap_rollup_with_unpaid_option exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_rollup_with_unpaid_option') IS NOT NULL
+	DROP TABLE #temp_cap_rollup_with_unpaid_option
+
+    SELECT cap.*
+		  ,prorated_option_bonus_not_paid
+	  INTO #temp_cap_rollup_with_unpaid_option
+	  FROM ClubDB.dbo.CapRollup cap
+ LEFT JOIN #temp_prorated_option_bonus_not_paid op
+		ON cap.PlayerID = op.PlayerID
+	   AND cap.ClubID = op.ClubID
+	   AND cap.Season = op.Season
+	 WHERE cap.ToDate IS NULL
+	   AND cap.season >= 2011   
+
+
 -- Check if #temp_bonus_acceleration exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_bonus_acceleration') IS NOT NULL
 	DROP TABLE #temp_bonus_acceleration
 
-    SELECT PlayerID AS nfl_player_id
-		  ,Season AS season
-		  ,ClubID AS nfl_club_id
-		  ,(SELECT SUM(SB) FROM ClubDB.dbo.CapRollup cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season >= cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) AS bonus_acceleration
+    SELECT cap.PlayerID AS nfl_player_id
+		  ,cap.Season AS season
+		  ,cap.ClubID AS nfl_club_id
+		  ,(SELECT SUM(SB - COALESCE(prorated_option_bonus_not_paid,0)) FROM #temp_cap_rollup_with_unpaid_option cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season >= cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) AS bonus_acceleration
 		  ,SB AS bonus_acceleration_post_june_1
-		  ,(SELECT SUM(SB) FROM ClubDB.dbo.CapRollup cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season >= cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) - SB AS bonus_acceleration_next_season_post_june_1
+		  ,(SELECT SUM(SB - COALESCE(prorated_option_bonus_not_paid,0)) FROM #temp_cap_rollup_with_unpaid_option cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season > cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) AS bonus_acceleration_next_season_post_june_1
 	  INTO #temp_bonus_acceleration
-	  FROM ClubDB.dbo.CapRollup cap
-	  WHERE cap.ToDate IS NULL
-		AND cap.season >= 2011
+	  FROM #temp_cap_rollup_with_unpaid_option cap
 
 /*
 SELECT * 
