@@ -8,7 +8,9 @@ This program is for creating a player salary cap information table.
 Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because nfl says 5 mil salary next year guaranteed, OTC says 3 mil 
 Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
 
-v11 takes out already paid future guaranteed money
+v12 adds in already paid roster bonus.
+
+**If a player has already been traded on that contract, then his new team has no dead hit if he gets traded?**
 
 **For Cap Casualty, go with the LTBE and dead money as it would be before the league year changes. for example...if a guy was a cap casualty 
 before the 2015 season, his dead money shouldn't be what it was for the end of the 2015 season, it should be what it was as of the day cut..
@@ -243,6 +245,78 @@ ORDER BY nfl_player_id, season, nfl_club_id
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+Create a table to determine already paid roster bonuses.
+
+OUTPUT TABLES:
+#temp_already_paid_roster_bonus
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_already_paid_roster_bonus exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_already_paid_roster_bonus') IS NOT NULL
+	DROP TABLE #temp_already_paid_roster_bonus
+
+    SELECT cf.PlayerID AS nfl_player_id
+		  ,cf.Season AS season
+		  ,cf.ClubID AS nfl_club_id
+		  ,ToDate AS to_date
+		  ,SUM(Amount) AS already_paid_roster_bonus
+	  INTO #temp_already_paid_roster_bonus
+	  FROM [ClubDB].[dbo].[CashFlowValue] cf
+	 WHERE UPPER(SectionType) IN ('ROSTER BONUS')
+	   AND [Week] IS NULL
+	   AND cf.Season >= 2011
+	   AND PaymentDate <= GETDATE()
+  GROUP BY cf.PlayerID
+		  ,cf.Season
+		  ,cf.ClubID
+		  ,ToDate
+/*
+SELECT *
+FROM #temp_already_paid_roster_bonus
+WHERE nfl_player_id = 28037
+ORDER BY nfl_player_id, nfl_club_id, Season
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table to determine already paid offseason bonuses.
+
+OUTPUT TABLES:
+#temp_already_paid_offseason_bonus
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_already_paid_offseason_bonus exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_already_paid_offseason_bonus') IS NOT NULL
+	DROP TABLE #temp_already_paid_offseason_bonus
+
+    SELECT cf.PlayerID AS nfl_player_id
+		  ,cf.Season AS season
+		  ,cf.ClubID AS nfl_club_id
+		  ,ToDate AS to_date
+		  ,SUM(Amount) AS already_paid_offseason_bonus
+	  INTO #temp_already_paid_offseason_bonus
+	  FROM [ClubDB].[dbo].[CashFlowValue] cf
+	 WHERE UPPER(SectionType) IN ('OFF-SEASON')
+	   AND [Week] IS NULL
+	   AND cf.Season >= 2011 --@current_season
+	   AND PaymentDate <= GETDATE()
+  GROUP BY cf.PlayerID
+		  ,cf.Season
+		  ,cf.ClubID
+		  ,ToDate
+
+/*
+SELECT *
+FROM #temp_already_paid_offseason_bonus
+WHERE nfl_player_id = 32230
+ORDER BY nfl_player_id, nfl_club_id, Season
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 Create a table with a player's cap hit and dead money.
 
 Sandy's old SAS code added a day to the cap end date and then called the
@@ -294,16 +368,16 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 		  ,cap_details_offseason_bonus
 		  ,cap_details_option_bonus
 		  ,cap_details_roster_bonus
-		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - cap_details_option_bonus
-				ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0)
+		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - COALESCE(cap_details_option_bonus,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
+				ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
 		   END AS dead_cap
-		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - cap_details_option_bonus
-						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) END)
+		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - COALESCE(cap_details_option_bonus,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
+						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) END)
 		   AS cap_savings
-		  ,SB + COALESCE(future_guaranteed_money_cumulative,0) AS dead_cap_post_june_1
-		  ,CapAmt - (SB + COALESCE(future_guaranteed_money_cumulative,0)) AS cap_savings_post_june_1
-		  ,SB + PotAccel AS dead_cap_trade
-		  ,CapAmt - (SB + PotAccel) AS cap_savings_trade
+		  ,SB + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) AS dead_cap_post_june_1
+		  ,CapAmt - (SB + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0)) + COALESCE(already_paid_offseason_bonus,0) AS cap_savings_post_june_1
+		  ,SB + PotAccel + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) AS dead_cap_trade
+		  ,CapAmt - (SB + PotAccel + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)) AS cap_savings_trade
 		  ,Misc AS cap_miscellaneous
 		  ,PotAccel AS cap_potential_acceleration
 		  ,FullP5 AS cap_full_paragraph_5
@@ -340,6 +414,16 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 	   AND ecs.nfl_club_id = cap.ClubID
 	   --AND ecs.from_date = cap.FromDate
 	   AND COALESCE(ecs.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_already_paid_roster_bonus rb
+		ON rb.nfl_player_id = cap.PlayerID
+	   AND rb.season = cap.Season
+	   AND rb.nfl_club_id = cap.ClubID
+	   AND COALESCE(rb.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_already_paid_offseason_bonus ob
+		ON ob.nfl_player_id = cap.PlayerID
+	   AND ob.season = cap.Season
+	   AND ob.nfl_club_id = cap.ClubID
+	   AND COALESCE(ob.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
 	 WHERE 1=1
 	   AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 	   AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
@@ -352,6 +436,6 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 /*
 SELECT *
 FROM #temp_cap_hits ch1
-WHERE nfl_player_id = 35441 and season = 2015
+WHERE cap_end_date is null
 ORDER BY nfl_player_id, season, nfl_club_id, cap_start_date
 */
