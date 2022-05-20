@@ -5,10 +5,17 @@
 
 This program is for creating a player salary cap information table.
 
-Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because nfl says 5 mil salary next year guaranteed, OTC says 3 mil 
-Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
+v13 tried to use "earned" and "guaranteed" to get future dead money.
 
-v12 adds in already paid roster bonus.
+
+**Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
+actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
+Also, does PotAccel increase once it is paid out? Because right now only the prorated initial signing bonus is in there (5.2
+mil per year against the cap, and the 1.2 mil per year from the option bonus is not in there).
+
+Maybe in addition to cap already earned, make a prorated cap already / not earned, and then you can take out unearned prorated from the 
+SB field, and then once it is earned, you can take it out of the cap already earned because it is back in the prorated SB field**
+
 
 **If a player has already been traded on that contract, then his new team has no dead hit if he gets traded?**
 
@@ -17,7 +24,6 @@ before the 2015 season, his dead money shouldn't be what it was for the end of t
 ltbe and other bonuses probably weren't paid yet.
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -49,21 +55,21 @@ IF OBJECT_ID('tempdb..#temp_cap_details') IS NOT NULL
 		  ,FromDate
 		  ,ToDate
 		  ,SectionType
-		  ,CapAmount		  
+		  ,CapAmount  
       FROM ClubDB.dbo.CapDetails) up
      PIVOT (MAX(CapAmount) FOR SectionType IN ([Off-Season],[Option],[Roster Bonus],[Salary Advance])) AS pvt
-	 WHERE Season >= 2011
+     WHERE Season >= 2011
   ORDER BY PlayerID
 		  ,Season
  /*
  SELECT *
- FROM #temp_cap_details
- WHERE nfl_player_id = 38542
+ FROM #temp_cap_details_with_earned_guaranteed
+ WHERE PLAYERID=28037
  ORDER BY season
  */
 
 
- /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Create a table that notes early cash. Like Flacco in 2012, that cash was really for 2013 but was paid before end of league year.
 
@@ -121,199 +127,123 @@ IF OBJECT_ID('tempdb..#temp_early_cash') IS NOT NULL
 
  /*
  SELECT *
- FROM #temp_early_cash
- WHERE nfl_player_id = 35441
+ FROM #temp_signing_bonus_lag
+ WHERE nfl_player_id = 37078
  ORDER BY nfl_club_id, Season, COALESCE(To_Date,'12/31/2099')
  */
 		  
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create a table that has future guaranteed money.
-
-This needs to have a season so that it doesn't get added to all future seasons.
-
-Note that sometimes players will have multiple guarantees in a season. For instance if they have future p5 and
-future roster bonus guaranteed (i.e. Carson Palmer in 2015). That's why you sum it here. The reason the amounts will
-change as the dates go is once the money is paid out, it no longer is in the guaranteed money.
-
-As part of this you create a table that has future guaranteed already paid out (#temp_future_guaranteed_money_already_paid).
-For example, Suh converted $20 mil in P5 to roster and signing bonus. Both got inserted into his prorated bonus amount for future years.
-But since only 10 was paid in 2016 and 10 was deferred to 2017, the cap guarantee table listed another $10 mil 
-guaranteed in 2017. So when you do dead money and include future guarantees, it gets double counted.  
+Create a table that has cap money already earned.
 
 OUTPUT TABLES:
-#temp_future_guaranteed_money_cumulative
+#temp_cap_already_earned
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_contract_section_earned exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contract_section_earned') IS NOT NULL
+	DROP TABLE #temp_contract_section_earned
+
+	SELECT PlayerID AS nfl_player_id
+		  ,ClubID AS nfl_club_id
+		  ,cd.Season AS season		  
+		  ,FromDate AS from_date
+		  ,SUM([Amount]) AS cap_already_earned
+	  INTO #temp_contract_section_earned
+	  FROM ClubDB.dbo.SectionYearEventRep sr
+INNER JOIN ClubDB.dbo.CapDetails cd
+		ON sr.SectionID = cd.SectionID
+       AND sr.Season = cd.Season
+     WHERE COALESCE(EventDate,CalculatedEventDate) <= GETDATE()
+	   AND sr.Season >= 2011
+  GROUP BY PlayerID
+		  ,ClubID
+		  ,cd.Season
+		  ,FromDate
+
+-- Check if #temp_cap_already_earned exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_already_earned') IS NOT NULL
+	DROP TABLE #temp_cap_already_earned
+
+	SELECT nfl_player_id
+		  ,nfl_club_id
+		  ,season		  
+		  ,from_date
+		  ,LEAD(from_date) OVER (PARTITION BY nfl_player_id, nfl_club_id, season ORDER BY from_date) AS to_date
+		  ,(SELECT SUM(cap_already_earned)
+		      FROM #temp_contract_section_earned cs2
+			 WHERE cs2.nfl_player_id = cs1.nfl_player_id
+			   AND cs2.nfl_club_id = cs1.nfl_club_id
+			   AND cs2.season = cs1.season
+			   AND cs2.from_date >= cs1.from_date) 
+		    AS cap_already_earned
+	  INTO #temp_cap_already_earned
+	  FROM #temp_contract_section_earned cs1
+
+ /*
+ SELECT *
+ FROM #temp_contract_section_earned
+ WHERE nfl_player_id = 38590
+ ORDER BY nfl_club_id, Season
+ */
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table that has future guaranteed cap money.
+
+OUTPUT TABLES:
+#temp_future_guaranteed_money
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_guaranteed_minus_earned exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_guaranteed_minus_earned') IS NOT NULL
+	DROP TABLE #temp_guaranteed_minus_earned
+
+    SELECT PlayerID AS nfl_player_id
+	      ,cg.Season AS season
+		  ,ClubID AS nfl_club_id
+		  ,ToDate AS to_date
+		  ,SUM(CASE WHEN COALESCE(Amount,0) >= Guar_Cap THEN 0 ELSE Guar_Cap - COALESCE(Amount,0) END) AS guaranteed_cap		   
+	  INTO #temp_guaranteed_minus_earned
+	  FROM ClubDB.dbo.CapGuarantee cg
+ LEFT JOIN ClubDB.dbo.SectionYearEventRep sr
+		ON cg.SectionID = sr.SectionID
+	   AND cg.Season = sr.Season
+	 WHERE Effective = 1
+	   AND cg.Season >= 2011
+	   AND cg.Guar_Cap > 0
+	   AND ChangingSectionID = 0
+  GROUP BY PlayerID
+	      ,cg.Season
+		  ,ClubID
+		  ,ToDate
 
 -- Check if #temp_future_guaranteed_money exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_future_guaranteed_money') IS NOT NULL
 	DROP TABLE #temp_future_guaranteed_money
 
-    SELECT PlayerID AS nfl_player_id
-	      ,Season AS season
-		  ,ClubID AS nfl_club_id
-		  ,ToDate AS to_date
-		  ,SUM(DISTINCT cg.Guar_Cap) AS future_guaranteed_money
-	  INTO #temp_future_guaranteed_money
-	  FROM ClubDB.dbo.CapGuarantee cg
-	 WHERE Effective = 1
-	   AND cg.Season >= 2011
-  GROUP BY PlayerID
-	      ,Season
-		  ,ClubID
-		  ,ToDate
-  ORDER BY PlayerID
-	      ,Season
-		  ,ClubID
-		  ,ToDate
-
-/*	   
-SELECT *
-FROM #temp_future_guaranteed_money_already_paid
-WHERE nfl_player_id = 37248
-ORDER BY Season, To_Date
-*/
-
--- Check if #temp_future_guaranteed_money_already_paid exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_future_guaranteed_money_already_paid') IS NOT NULL
-	DROP TABLE #temp_future_guaranteed_money_already_paid
-
-    SELECT cg.PlayerID AS nfl_player_id
-		  ,cg.ClubID AS nfl_club_id
-		  ,cg.Season AS season
-		  ,cg.ToDate AS to_date
-		  ,SUM(Guar_Cap) AS future_guaranteed_money_already_paid
-	  INTO #temp_future_guaranteed_money_already_paid
-      FROM ClubDB.dbo.CapGuarantee cg
-INNER JOIN ClubDB.dbo.CapDetails cd
-		ON cg.PlayerID = cd.PlayerID
-	   AND cg.ClubID = cd.ClubID
-	   AND cg.SectionID = cd.SectionID
-	   AND COALESCE(cg.ToDate,'12/31/2099') = COALESCE(cd.ToDate,'12/31/2099')	   
-	   AND cg.Guar_Cap = cd.CashAmount
-     WHERE Effective = 1
-	   AND cd.Season < cg.Season
-  GROUP BY cg.PlayerID
-		  ,cg.ClubID
-		  ,cg.Season
-		  ,cg.ToDate
-
-
--- Check if #temp_future_guaranteed_money_both exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_future_guaranteed_money_both') IS NOT NULL
-	DROP TABLE #temp_future_guaranteed_money_both
-
-    SELECT fg.nfl_player_id
-		  ,fg.nfl_club_id
-		  ,fg.season
-		  ,fg.to_date
-		  ,fg.future_guaranteed_money - COALESCE(future_guaranteed_money_already_paid,0) AS future_guaranteed_money
-	  INTO #temp_future_guaranteed_money_both
-      FROM #temp_future_guaranteed_money fg
- LEFT JOIN #temp_future_guaranteed_money_already_paid ap
-		ON fg.nfl_player_id = ap.nfl_player_id
-	   AND fg.nfl_club_id = ap.nfl_club_id
-	   AND fg.season = ap.season
-	   AND COALESCE(fg.to_date,'12/31/2099') = COALESCE(ap.to_date,'12/31/2099')	   
-
-
--- Check if #temp_future_guaranteed_money_cumulative exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_future_guaranteed_money_cumulative') IS NOT NULL
-	DROP TABLE #temp_future_guaranteed_money_cumulative
-
     SELECT nfl_player_id
 	      ,season
 		  ,nfl_club_id
 		  ,to_date
-		  ,(SELECT SUM(future_guaranteed_money)
-		      FROM #temp_future_guaranteed_money_both gm2
+		  ,(SELECT SUM(guaranteed_cap)
+		      FROM #temp_guaranteed_minus_earned gm2
 			 WHERE gm2.nfl_player_id = gm1.nfl_player_id
 			   AND gm2.nfl_club_id = gm1.nfl_club_id
 			   AND COALESCE(gm2.to_date,'12/31/2099') = COALESCE(gm1.to_date,'12/31/2099')
 			   AND gm2.season >= gm1.season) 
-		    AS future_guaranteed_money_cumulative
-	  INTO #temp_future_guaranteed_money_cumulative
-	  FROM #temp_future_guaranteed_money_both gm1
+		    AS future_guaranteed_money
+	  INTO #temp_future_guaranteed_money
+	  FROM #temp_guaranteed_minus_earned gm1
 
 /*
 SELECT *
-FROM #temp_future_guaranteed_money_both
-WHERE nfl_player_id = 37248
-ORDER BY nfl_player_id, season, nfl_club_id
+FROM #temp_future_guaranteed_money
+WHERE nfl_player_id = 37078
 */
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Create a table to determine already paid roster bonuses.
-
-OUTPUT TABLES:
-#temp_already_paid_roster_bonus
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_already_paid_roster_bonus exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_already_paid_roster_bonus') IS NOT NULL
-	DROP TABLE #temp_already_paid_roster_bonus
-
-    SELECT cf.PlayerID AS nfl_player_id
-		  ,cf.Season AS season
-		  ,cf.ClubID AS nfl_club_id
-		  ,ToDate AS to_date
-		  ,SUM(Amount) AS already_paid_roster_bonus
-	  INTO #temp_already_paid_roster_bonus
-	  FROM [ClubDB].[dbo].[CashFlowValue] cf
-	 WHERE UPPER(SectionType) IN ('ROSTER BONUS')
-	   AND [Week] IS NULL
-	   AND cf.Season >= 2011
-	   AND PaymentDate <= GETDATE()
-  GROUP BY cf.PlayerID
-		  ,cf.Season
-		  ,cf.ClubID
-		  ,ToDate
-/*
-SELECT *
-FROM #temp_already_paid_roster_bonus
-WHERE nfl_player_id = 28037
-ORDER BY nfl_player_id, nfl_club_id, Season
-*/
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Create a table to determine already paid offseason bonuses.
-
-OUTPUT TABLES:
-#temp_already_paid_offseason_bonus
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_already_paid_offseason_bonus exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_already_paid_offseason_bonus') IS NOT NULL
-	DROP TABLE #temp_already_paid_offseason_bonus
-
-    SELECT cf.PlayerID AS nfl_player_id
-		  ,cf.Season AS season
-		  ,cf.ClubID AS nfl_club_id
-		  ,ToDate AS to_date
-		  ,SUM(Amount) AS already_paid_offseason_bonus
-	  INTO #temp_already_paid_offseason_bonus
-	  FROM [ClubDB].[dbo].[CashFlowValue] cf
-	 WHERE UPPER(SectionType) IN ('OFF-SEASON')
-	   AND [Week] IS NULL
-	   AND cf.Season >= 2011 --@current_season
-	   AND PaymentDate <= GETDATE()
-  GROUP BY cf.PlayerID
-		  ,cf.Season
-		  ,cf.ClubID
-		  ,ToDate
-
-/*
-SELECT *
-FROM #temp_already_paid_offseason_bonus
-WHERE nfl_player_id = 32230
-ORDER BY nfl_player_id, nfl_club_id, Season
-*/
-
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -368,16 +298,20 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 		  ,cap_details_offseason_bonus
 		  ,cap_details_option_bonus
 		  ,cap_details_roster_bonus
-		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - COALESCE(cap_details_option_bonus,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
-				ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
+		  ,SB
+		  ,PotAccel
+		  ,COALESCE(future_guaranteed_money,0) as fgm
+		  ,COALESCE(cap_already_earned,0) as cae		  
+		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) - COALESCE(cap_details_option_bonus,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+				ELSE SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 		   END AS dead_cap
-		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - COALESCE(cap_details_option_bonus,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)
-						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) END)
+		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) - COALESCE(cap_details_option_bonus,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END END)
 		   AS cap_savings
-		  ,SB + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) AS dead_cap_post_june_1
-		  ,CapAmt - (SB + COALESCE(future_guaranteed_money_cumulative,0) + COALESCE(already_paid_roster_bonus,0)) + COALESCE(already_paid_offseason_bonus,0) AS cap_savings_post_june_1
-		  ,SB + PotAccel + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0) AS dead_cap_trade
-		  ,CapAmt - (SB + PotAccel + COALESCE(already_paid_roster_bonus,0) + COALESCE(already_paid_offseason_bonus,0)) AS cap_savings_trade
+		  ,SB + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS dead_cap_post_june_1
+		  ,CapAmt - (SB + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) AS cap_savings_post_june_1
+		  ,SB + PotAccel + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS dead_cap_trade
+		  ,CapAmt - (SB + PotAccel + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) AS cap_savings_trade
 		  ,Misc AS cap_miscellaneous
 		  ,PotAccel AS cap_potential_acceleration
 		  ,FullP5 AS cap_full_paragraph_5
@@ -397,11 +331,6 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 	   AND cd.nfl_club_id = cap.ClubID
 	   AND cd.from_date = cap.FromDate
 	   AND COALESCE(cd.to_date,'12/31/2099') = COALESCE(cap.ToDate,'12/31/2099')
- LEFT JOIN #temp_future_guaranteed_money_cumulative fg
-		ON fg.nfl_player_id = cap.PlayerID
-	   AND fg.Season = cap.Season
-	   AND fg.nfl_club_id = cap.ClubID
-	   AND COALESCE(fg.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
  LEFT JOIN #temp_early_cash eca
 		ON eca.nfl_player_id = cap.PlayerID
 	   AND eca.season_to_move_cash_to = cap.Season
@@ -414,16 +343,17 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 	   AND ecs.nfl_club_id = cap.ClubID
 	   --AND ecs.from_date = cap.FromDate
 	   AND COALESCE(ecs.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
- LEFT JOIN #temp_already_paid_roster_bonus rb
-		ON rb.nfl_player_id = cap.PlayerID
-	   AND rb.season = cap.Season
-	   AND rb.nfl_club_id = cap.ClubID
-	   AND COALESCE(rb.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
- LEFT JOIN #temp_already_paid_offseason_bonus ob
-		ON ob.nfl_player_id = cap.PlayerID
-	   AND ob.season = cap.Season
-	   AND ob.nfl_club_id = cap.ClubID
-	   AND COALESCE(ob.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_cap_already_earned ae
+		ON ae.nfl_player_id = cap.PlayerID
+	   AND ae.season = cap.Season
+	   AND ae.nfl_club_id = cap.ClubID
+	   AND cap.FromDate >= ae.from_date
+	   AND cap.FromDate < COALESCE(ae.to_date,'12/31/2099')
+ LEFT JOIN #temp_future_guaranteed_money fg
+		ON fg.nfl_player_id = cap.PlayerID
+	   AND fg.season = cap.Season
+	   AND fg.nfl_club_id = cap.ClubID
+	   AND COALESCE(fg.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
 	 WHERE 1=1
 	   AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 	   AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
@@ -436,6 +366,6 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 /*
 SELECT *
 FROM #temp_cap_hits ch1
-WHERE cap_end_date is null
+WHERE cap_end_date IS NULL
 ORDER BY nfl_player_id, season, nfl_club_id, cap_start_date
 */
