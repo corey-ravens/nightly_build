@@ -9,9 +9,7 @@ Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because
 Ndamukong Suh - dead money off by 10 mil in 2017 - NFL has 10 more mil future guarnateed than OTC has
 Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
 
-v9 takes out unpaid option bonus proration from the bonus_acceleration variable.
-
-**But you want future years after the option WOULD HAVE BEEN picked up to go back to not having that option bonus removed from the prorated signing bonus**
+v10 totally changes how you have been doing things. Using potAccel instead of your created bonus acceleration table.
 
 **For Cap Casualty, go with the LTBE and dead money as it would be before the league year changes. for example...if a guy was a cap casualty 
 before the 2015 season, his dead money shouldn't be what it was for the end of the 2015 season, it should be what it was as of the day cut..
@@ -26,7 +24,6 @@ Create a table with the more specific cap distribution. So you can separate out 
 
 OUTPUT TABLES:
 #temp_cap_details
-#temp_cash_details
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -37,103 +34,70 @@ IF OBJECT_ID('tempdb..#temp_cap_details') IS NOT NULL
     SELECT PlayerID AS nfl_player_id
 		  ,Season AS season
 		  ,ClubID AS nfl_club_id
-		  ,[Buyback] AS cap_details_buyback
-		  ,[Deion Rule] AS cap_details_deion_rule
-		  ,[Escalator] AS cap_details_escalator
-		  ,[Grievance] AS cap_details_grievance
-		  ,[Incentive] AS cap_details_incentive
-		  ,[Incentives/Other Terms] AS cap_details_incentive_other_terms
-		  ,[Injury Protection] AS cap_details_injury_protection
-		  ,[Injury Settlement] AS cap_details_injury_settlement
-		  ,[LTBE] AS cap_details_ltbe
-		  ,[Misc] AS cap_details_misc
+		  ,FromDate AS from_date
+		  ,ToDate AS to_date
 		  ,[Off-Season] AS cap_details_offseason_bonus
 		  ,[Option] AS cap_details_option_bonus
-		  ,[Other Compensation] AS cap_details_other_compensation
-		  ,[Other Terms] AS cap_details_other_terms
-		  ,[P5] AS cap_details_p5
-		  ,[PCMS Misc] AS cap_details_pcms_misc
-		  ,[PF] AS cap_details_pf
-		  ,[ReAllocation] AS cap_details_reallocation
-		  ,[Reporting Bonus] AS cap_details_reporting_bonus
 		  ,[Roster Bonus] AS cap_details_roster_bonus
 		  ,[Salary Advance] AS cap_details_salary_advance
-		  ,[Signing Bonus] AS cap_details_signing_bonus
-		  ,[Termination Pay] AS cap_details_termination_pay
-		  ,[Vet Cap Credit] AS cap_details_vet_cap_credit
 	  INTO #temp_cap_details
       FROM (
     SELECT PlayerID
 		  ,Season
 		  ,ClubID
+		  ,FromDate
 		  ,ToDate
 		  ,SectionType
 		  ,CapAmount		  
       FROM ClubDB.dbo.CapDetails) up
-     PIVOT (MAX(CapAmount) FOR SectionType IN ([Buyback],[Deion Rule],[Escalator],[Grievance],[Incentive],[Incentives/Other Terms],[Injury Protection]
-											  ,[Injury Settlement],[LTBE],[Misc],[Off-Season],[Option],[Other Compensation],[Other Terms],[P5],[PCMS Misc],[PF]
-											  ,[ReAllocation],[Reporting Bonus],[Roster Bonus],[Salary Advance],[Signing Bonus],[Termination Pay]
-											  ,[Vet Cap Credit])) AS pvt
+     PIVOT (MAX(CapAmount) FOR SectionType IN ([Off-Season],[Option],[Roster Bonus],[Salary Advance])) AS pvt
 	 WHERE Season >= 2011
-	   AND ToDate IS NULL
   ORDER BY PlayerID
 		  ,Season
  /*
  SELECT *
- FROM #temp_caSH_details
- WHERE nfl_player_id = 37248
+ FROM #temp_cap_details
+ WHERE nfl_player_id = 38542
  ORDER BY season
  */
 
 
--- Check if #temp_cash_details exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_cash_details') IS NOT NULL
-	DROP TABLE #temp_cash_details
+ /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table that notes early cash. Like Flacco in 2012, that cash was really for 2013 but was paid before end of league year.
+
+OUTPUT TABLES:
+#temp_early_cash
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_early_cash exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_early_cash') IS NOT NULL
+	DROP TABLE #temp_early_cash
 
     SELECT PlayerID AS nfl_player_id
-		  ,Season AS season
+		  ,cap.Season AS season
+		  ,cap.Season + 1 AS season_to_move_cash_to
 		  ,ClubID AS nfl_club_id
-		  ,[Buyback] AS cash_details_buyback
-		  ,[Deion Rule] AS cash_details_deion_rule
-		  ,[Escalator] AS cash_details_escalator
-		  ,[Grievance] AS cash_details_grievance
-		  ,[Incentive] AS cash_details_incentive
-		  ,[Incentives/Other Terms] AS cash_details_incentive_other_terms
-		  ,[Injury Protection] AS cash_details_injury_protection
-		  ,[Injury Settlement] AS cash_details_injury_settlement
-		  ,[LTBE] AS cash_details_ltbe
-		  ,[Misc] AS cash_details_misc
-		  ,[Off-Season] AS cash_details_offseason_bonus
-		  ,[Option] AS cash_details_option_bonus
-		  ,[Other Compensation] AS cash_details_other_compensation
-		  ,[Other Terms] AS cash_details_other_terms
-		  ,[P5] AS cash_details_p5
-		  ,[PCMS Misc] AS cash_details_pcms_misc
-		  ,[PF] AS cash_details_pf
-		  ,[ReAllocation] AS cash_details_reallocation
-		  ,[Reporting Bonus] AS cash_details_reporting_bonus
-		  ,[Roster Bonus] AS cash_details_roster_bonus
-		  ,[Salary Advance] AS cash_details_salary_advance
-		  ,[Signing Bonus] AS cash_details_signing_bonus
-		  ,[Termination Pay] AS cash_details_termination_pay
-		  ,[Vet Cap Credit] AS cash_details_vet_cash_credit
-	  INTO #temp_cash_details
-      FROM (
-    SELECT PlayerID
-		  ,Season
-		  ,ClubID
-		  ,ToDate
-		  ,SectionType
-		  ,CashAmount		  
-      FROM ClubDB.dbo.CapDetails) up
-     PIVOT (MAX(CashAmount) FOR SectionType IN ([Buyback],[Deion Rule],[Escalator],[Grievance],[Incentive],[Incentives/Other Terms],[Injury Protection]
-											  ,[Injury Settlement],[LTBE],[Misc],[Off-Season],[Option],[Other Compensation],[Other Terms],[P5],[PCMS Misc],[PF]
-											  ,[ReAllocation],[Reporting Bonus],[Roster Bonus],[Salary Advance],[Signing Bonus],[Termination Pay]
-											  ,[Vet Cap Credit])) AS pvt
-	 WHERE Season >= 2011
-	   AND ToDate IS NULL
+		  ,FromDate AS from_date
+		  ,ToDate AS to_date
+		  ,CashSB_SB AS early_cash_signing_bonus
+	  INTO #temp_early_cash
+      FROM ClubDB.dbo.CapRollup cap
+INNER JOIN Analytics.dbo.map_nfl_league_year_dates ld
+		ON cap.Season = ld.season
+	 WHERE cap.Season >= 2011
+	   AND FromDate >= regular_season_end
+	   AND CashSB_SB > 0
   ORDER BY PlayerID
 		  ,Season
+
+ /*
+ SELECT *
+ FROM #temp_early_cash
+ WHERE nfl_player_id = 33099
+ ORDER BY season
+ */
 
 		  
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -142,207 +106,61 @@ Create a table that has future guaranteed money.
 
 This needs to have a season so that it doesn't get added to all future seasons.
 
-Note that sometimes players will have multiple rows in this table. For instance if they have future p5 and
-future roster bonus guaranteed (i.e. Carson Palmer in 2016). Because you do a sum in the subselect when 
-creating the final table, both amounts are taken into account there.
+Note that sometimes players will have multiple guarantees in a season. For instance if they have future p5 and
+future roster bonus guaranteed (i.e. Carson Palmer in 2015). That's why you sum it here. The reason the amounts will
+change as the dates go is once the money is paid out, it no longer is in the guaranteed money.
 
 OUTPUT TABLES:
-#temp_future_guaranteed_money
+#temp_future_guaranteed_money_cumulative
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-DECLARE @current_season INT
-SELECT @current_season = (SELECT season FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() BETWEEN league_year_start AND league_year_end)
-
--- Check if #temp_future_guaranteed_money_prev_seasons exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_future_guaranteed_money_prev_seasons') IS NOT NULL
-	DROP TABLE #temp_future_guaranteed_money_prev_seasons
-
-    SELECT cg.PlayerID AS nfl_player_id
-	      ,cg.Season AS season
-		  ,cg.ClubID AS nfl_club_id
-		  ,cg.Guar_Cap AS future_guaranteed_money
-	      ,RANK() OVER (PARTITION BY PlayerID, cg.Season, ClubID ORDER BY COALESCE(ToDate,'12/31/2088') DESC, ChangeDate) AS guarantee_order
-	  INTO #temp_future_guaranteed_money_prev_seasons
-	  FROM ClubDB.dbo.CapGuarantee cg
-INNER JOIN Analytics.dbo.map_nfl_league_year_dates ld
-		ON cg.Season = ld.season
-	 WHERE Effective = 1
-	   --AND Finalized = 1
-	   --AND PotentialGuarantee = 0
-	   AND cg.Season >= 2011
-	   AND cg.Season < @current_season
-	   AND ChangeDate < regular_season_end
-  ORDER BY cg.PlayerID
-	      ,cg.Season
-		  ,cg.ClubID
-
-/*	   
-SELECT *
-FROM #temp_cap_guarantee_prev_seasons
-WHERE PlayerID = 28037
-ORDER BY Season, guarantee_order
-*/
 
 -- Check if #temp_future_guaranteed_money exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_future_guaranteed_money') IS NOT NULL
 	DROP TABLE #temp_future_guaranteed_money
 
-    SELECT cg.PlayerID AS nfl_player_id
-	      ,cg.Season AS season
-		  ,cg.ClubID AS nfl_club_id
-		  ,cg.Guar_Cap AS future_guaranteed_money
-	      ,1 AS guarantee_order
+    SELECT PlayerID AS nfl_player_id
+	      ,Season AS season
+		  ,ClubID AS nfl_club_id
+		  ,ToDate
+		  ,SUM(DISTINCT cg.Guar_Cap) AS future_guaranteed_money
 	  INTO #temp_future_guaranteed_money
 	  FROM ClubDB.dbo.CapGuarantee cg
 	 WHERE Effective = 1
-	   AND cg.Season >= @current_season
-	   AND ToDate IS NULL
-  ORDER BY cg.PlayerID
-	      ,cg.Season
-		  ,cg.ClubID
-
-/*	   
-SELECT *
-FROM #temp_future_guaranteed_money
-WHERE nfl_player_id = 35441
-ORDER BY Season, guarantee_order
-*/
-
-INSERT INTO #temp_future_guaranteed_money
- 	 SELECT *
-	   FROM #temp_future_guaranteed_money_prev_seasons
-	  WHERE guarantee_order = 1
-
-/*	   
-SELECT *
-FROM #temp_future_guaranteed_money
-WHERE nfl_player_id = 32230
-ORDER BY Season
-*/
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Create a table with the potential bonus acceleration if a player is cut. 
-
-OUTPUT TABLES:
-#temp_bonus_acceleration
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_paid_option exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_paid_option') IS NOT NULL
-	DROP TABLE #temp_paid_option
-
-    SELECT PlayerID
+	   AND cg.Season >= 2011
+  GROUP BY PlayerID
+	      ,Season
 		  ,ClubID
-		  ,Season
-		  ,SectionID
-		  ,1 AS option_paid
-	  INTO #temp_paid_option
-	  FROM ClubDB.dbo.CapDetails
-	 WHERE ToDate IS NULL
-	   AND Season >= 2011
-	   AND Season <= 2016
-	   AND UPPER(SectionType) = 'OPTION'
-	   AND Category IS NULL
-	   AND CashAmount > 0
+		  ,ToDate
+  ORDER BY PlayerID
+	      ,Season
+		  ,ClubID
+		  ,ToDate
 
-
--- Check if #temp_prorated_option_bonus_not_paid exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_prorated_option_bonus_not_paid') IS NOT NULL
-	DROP TABLE #temp_prorated_option_bonus_not_paid
-
-    SELECT cd.PlayerID
-		  ,cd.ClubID
-		  ,cd.Season
-		  ,CASE WHEN COALESCE(option_paid,0) = 0 THEN CapAmount ELSE 0 END AS prorated_option_bonus_not_paid
-	  INTO #temp_prorated_option_bonus_not_paid
-	  FROM ClubDB.dbo.CapDetails cd
- LEFT JOIN #temp_paid_option po
-		ON cd.PlayerID = po.PlayerID
-	   AND cd.ClubID = po.ClubID
-	   AND cd.SectionID = po.SectionID
-	 WHERE ToDate IS NULL
-	   AND cd.Season >= 2011
-	   AND UPPER(SectionType) = 'OPTION'
-	   AND UPPER(Category) = 'SB'
-
-
--- Check if #temp_cap_rollup_with_unpaid_option exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_cap_rollup_with_unpaid_option') IS NOT NULL
-	DROP TABLE #temp_cap_rollup_with_unpaid_option
-
-    SELECT cap.*
-		  ,prorated_option_bonus_not_paid
-	  INTO #temp_cap_rollup_with_unpaid_option
-	  FROM ClubDB.dbo.CapRollup cap
- LEFT JOIN #temp_prorated_option_bonus_not_paid op
-		ON cap.PlayerID = op.PlayerID
-	   AND cap.ClubID = op.ClubID
-	   AND cap.Season = op.Season
-	 WHERE cap.ToDate IS NULL
-	   AND cap.season >= 2011   
-
-
--- Check if #temp_bonus_acceleration exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_bonus_acceleration') IS NOT NULL
-	DROP TABLE #temp_bonus_acceleration
-
-    SELECT cap.PlayerID AS nfl_player_id
-		  ,cap.Season AS season
-		  ,cap.ClubID AS nfl_club_id
-		  ,(SELECT SUM(SB - COALESCE(prorated_option_bonus_not_paid,0)) FROM #temp_cap_rollup_with_unpaid_option cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season >= cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) AS bonus_acceleration
-		  ,SB AS bonus_acceleration_post_june_1
-		  ,(SELECT SUM(SB - COALESCE(prorated_option_bonus_not_paid,0)) FROM #temp_cap_rollup_with_unpaid_option cap2 WHERE cap.PlayerID = cap2.PlayerID AND cap2.season > cap.season AND cap2.ToDate IS NULL AND cap.ClubID = cap2.ClubID) AS bonus_acceleration_next_season_post_june_1
-	  INTO #temp_bonus_acceleration
-	  FROM #temp_cap_rollup_with_unpaid_option cap
-
-/*
-SELECT * 
-FROM #temp_bonus_acceleration
-WHERE nfl_player_id = 37255
-*/
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Create a table to determine already paid roster bonuses.
-
-OUTPUT TABLES:
-#temp_already_paid_roster_bonus
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_already_paid_roster_bonus exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_already_paid_roster_bonus') IS NOT NULL
-	DROP TABLE #temp_already_paid_roster_bonus
-
-    SELECT CF.PlayerID AS nfl_player_id
-		  ,cf.Season AS season
-		  ,cf.ClubID  AS nfl_club_id
-		  ,Amount AS already_paid_roster_bonus
-	  INTO #temp_already_paid_roster_bonus
-	  FROM [ClubDB].[dbo].[CashFlowValue] cf
-INNER JOIN [ClubDB].[dbo].[CapGuarantee] cg
-		ON cf.PlayerID = cg.PlayerID
-	   AND cf.ClubID = cg.ClubID
-	   AND cf.ContractID = cg.ContractID
-	   AND cf.SectionID = cg.SectionID
-	   AND cg.Effective = 1
-INNER JOIN #temp_cap_details cap
-		ON cf.PlayerID = cap.nfl_player_id
-	   AND cf.ClubID = cap.nfl_club_id
-	   AND cf.Season = cap.season
-	   AND cf.Amount = cap.cap_details_roster_bonus
-	 WHERE UPPER(SectionType) = 'ROSTER BONUS'
-	   AND [Week] IS NULL
-	   AND cf.Season = @current_season
-
-/*
-SELECT * 
-FROM #temp_already_paid_roster_bonus
+/*	   
+SELECT *
+FROM #temp_future_guaranteed_money
 WHERE nfl_player_id = 28037
+ORDER BY Season, ToDate
 */
+
+-- Check if #temp_future_guaranteed_money_cumulative exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_future_guaranteed_money_cumulative') IS NOT NULL
+	DROP TABLE #temp_future_guaranteed_money_cumulative
+
+    SELECT nfl_player_id
+	      ,season
+		  ,nfl_club_id
+		  ,ToDate AS to_date
+		  ,(SELECT SUM(future_guaranteed_money)
+		      FROM #temp_future_guaranteed_money gm2
+			 WHERE gm2.nfl_player_id = gm1.nfl_player_id
+			   AND gm2.nfl_club_id = gm1.nfl_club_id
+			   AND COALESCE(gm2.ToDate,'12/31/2099') = COALESCE(gm1.ToDate,'12/31/2099')
+			   AND gm2.season >= gm1.season
+				) AS future_guaranteed_money_cumulative
+	  INTO #temp_future_guaranteed_money_cumulative
+	  FROM #temp_future_guaranteed_money gm1
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -375,110 +193,83 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
     SELECT PlayerID AS nfl_player_id
 		  ,CONCAT(last_name,', ',goes_by) AS player
 	      ,ClubID AS nfl_club_id
-		  --,cl.id AS bane_club_id
 		  ,cap.Season AS season
 		  ,CASE WHEN CapAmt > 0 AND Cash = 0 AND cap.season >= 2002 AND Para5 = 0 THEN 1 
-				WHEN cap.season = @current_season AND cap.ClubID <> (SELECT ClubID FROM ClubDB.dbo.PlayerExtract pe WHERE pe.PlayerID = cap.PlayerID) THEN 1
+				WHEN cap.season >= @current_season AND cap.ClubID <> (SELECT ClubID FROM ClubDB.dbo.PlayerExtract pe WHERE pe.PlayerID = cap.PlayerID) THEN 1
 				ELSE 0
 		   END AS dead_money_flag
 		  ,CapAmt AS cap_amount
-		  ,Cash AS cash_amount
+		  ,Cash + COALESCE(eca.early_cash_signing_bonus,0) - COALESCE(ecs.early_cash_signing_bonus,0) AS cash_amount
 		  ,Para5 AS cap_paragraph_5
 		  ,CashP5 AS cash_paragraph_5
 		  ,SB AS cap_signing_bonus
 		  ,CashSB_SB AS cash_signing_bonus
 		  ,LTBE AS cap_likely_to_be_earned
-		  ,cap_details_ltbe
+		  ,CashLTBE_OffSeason AS cash_likely_to_be_earned_offseason
+		  ,CashLTBE_Other AS cash_likely_to_be_earned_other
+		  ,CashLTBE_RB AS cash_roster_bonus
+		  ,CashSB_Option AS cash_option_bonus
 		  ,cap_details_offseason_bonus
-		  ,cash_details_offseason_bonus
 		  ,cap_details_option_bonus
-		  ,cash_details_option_bonus
 		  ,cap_details_roster_bonus
-		  ,cash_details_roster_bonus
-		  ,COALESCE(bonus_acceleration,0)
-					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season >= cap.Season),0)
-					+ CASE WHEN cap.Season <= @current_season THEN LTBE - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
-		   AS dead_cap
-		  ,COALESCE(SB,0)
-					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season >= cap.Season),0)
-					+ CASE WHEN cap.Season <= @current_season THEN LTBE - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
-		   AS dead_cap_post_june_1
-		  ,COALESCE(bonus_acceleration_next_season_post_june_1,0)
-					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season > cap.Season),0)
-		   AS dead_cap_next_season_post_june_1
-		  ,COALESCE(bonus_acceleration,0)
-					+ CASE WHEN cap.Season <= @current_season THEN LTBE ELSE 0 END
-		   AS dead_cap_trade
+		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - cap_details_option_bonus
+				ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) 
+		   END AS dead_cap
+		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) - cap_details_option_bonus
+						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money_cumulative,0) END)
+		   AS cap_savings
+		  ,SB + COALESCE(future_guaranteed_money_cumulative,0) AS dead_cap_post_june_1
+		  ,CapAmt - (SB + COALESCE(future_guaranteed_money_cumulative,0)) AS cap_savings_post_june_1
+		  ,SB + PotAccel AS dead_cap_trade
+		  ,CapAmt - (SB + PotAccel) AS cap_savings_trade
 		  ,Misc AS cap_miscellaneous
 		  ,PotAccel AS cap_potential_acceleration
 		  ,FullP5 AS cap_full_paragraph_5
 		  ,Top51Delta AS cap_top_51_delta
-		  ,FromDate AS cap_start_date
-		  ,ToDate AS cap_end_date
-		  ,CASE WHEN FromDate < league_year_start THEN league_year_start ELSE FromDate END AS cap_season_start_date
-		  ,CASE WHEN COALESCE(ToDate,'12/31/2088') > league_year_end THEN league_year_end ELSE COALESCE(ToDate,'12/31/2088') END AS cap_season_end_date
-		  ,RANK() OVER (PARTITION BY PlayerID, ClubID, cap.Season ORDER BY COALESCE(ToDate,'12/31/2088') DESC, FromDate) AS cap_hit_order
+		  ,cap.FromDate AS cap_start_date
+		  ,cap.ToDate AS cap_end_date
+		  ,CASE WHEN COALESCE(cap.ToDate,'12/31/2088') <= regular_season_end THEN 1 ELSE 0 END AS cap_in_season_date_range
 	  INTO #temp_cap_hits
       FROM ClubDB.dbo.CapRollup cap
 INNER JOIN Analytics.dbo.map_nfl_league_year_dates da
 		ON cap.season = da.season
 INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON cap.PlayerID = pl.nfl_id
-/*INNER JOIN BaneProductionAnalytics.dbo.clubs cl
-		ON cap.ClubID = cl.nfl_club_id
-	   AND cl.is_disabled = 0*/
  LEFT JOIN #temp_cap_details cd
 		ON cd.nfl_player_id = cap.PlayerID
 	   AND cd.Season = cap.Season
 	   AND cd.nfl_club_id = cap.ClubID
- LEFT JOIN #temp_cash_details csh
-		ON csh.nfl_player_id = cap.PlayerID
-	   AND csh.Season = cap.Season
-	   AND csh.nfl_club_id = cap.ClubID
- LEFT JOIN #temp_bonus_acceleration ba
-		ON ba.nfl_player_id = cap.PlayerID
-	   AND ba.season = cap.season
-	   AND ba.nfl_club_id = cap.ClubID
- LEFT JOIN #temp_already_paid_roster_bonus ag
-		ON ag.nfl_player_id = cap.PlayerID
-	   AND ag.season = cap.season
-	   AND ag.nfl_club_id = cap.ClubID
+	   AND cd.from_date = cap.FromDate
+	   AND COALESCE(cd.to_date,'12/31/2099') = COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_future_guaranteed_money_cumulative fg
+		ON fg.nfl_player_id = cap.PlayerID
+	   AND fg.Season = cap.Season
+	   AND fg.nfl_club_id = cap.ClubID
+	   AND COALESCE(fg.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_early_cash eca
+		ON eca.nfl_player_id = cap.PlayerID
+	   AND eca.season_to_move_cash_to = cap.Season
+	   AND eca.nfl_club_id = cap.ClubID
+	   AND eca.from_date = cap.FromDate
+	   AND COALESCE(eca.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_early_cash ecs
+		ON ecs.nfl_player_id = cap.PlayerID
+	   AND ecs.season = cap.Season
+	   AND ecs.nfl_club_id = cap.ClubID
+	   AND ecs.from_date = cap.FromDate
+	   AND COALESCE(ecs.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
 	 WHERE 1=1
 	   AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 	   AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
-	   AND cap.ToDate IS NULL
+	   --AND cap.ToDate IS NULL
   ORDER BY PlayerID
 		  ,ClubID
 		  ,season
-		  ,FromDate
+		  ,cap.FromDate
 
 /*
-SELECT * FROM #temp_cap_hits
-WHERE nfl_player_id = 28037
-*/
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Add the cap and cash savings to the cap hit table.
-
-OUTPUT TABLES:
-#temp_cap_hits_with_savings
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_cap_hits_with_savings exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_cap_hits_with_savings') IS NOT NULL
-	DROP TABLE #temp_cap_hits_with_savings
-
-    SELECT *
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap,0) AS cap_savings
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_post_june_1,0) AS cap_savings_post_june_1
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_trade,0) AS cap_savings_trade
-	  INTO #temp_cap_hits_with_savings
-      FROM #temp_cap_hits
-
-/*
-SELECT * FROM #temp_cap_hits_with_savings
---WHERE nfl_player_id = 38542
+SELECT *
+FROM #temp_cap_hits ch1
+WHERE cap_end_date IS NULL
 ORDER BY nfl_player_id, season, nfl_club_id
 */
