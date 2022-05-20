@@ -9,7 +9,16 @@ Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because
 Ndamukong Suh - dead money off by 10 mil in 2017 - NFL has 10 more mil future guarnateed than OTC has
 Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
 
-v7 takes out the termination pay and makes roster bonus its own table so you can exclude it if it is already guaranteed.
+v8 includes the offseason workout bonuses in dead money, also changes to ltbe minus already guaranteed money and adds traded dead money
+
+**For Cap Casualty, go with the LTBE and dead money as it would be before the league year changes. for example...if a guy was a cap casualty 
+before the 2015 season, his dead money shouldn't be what it was for the end of the 2015 season, it should be what it was as of the day cut..
+ltbe and other bonuses probably weren't paid yet.
+
+Tyrod's isnt a signing bonus, it's an option for past 2017 might want to change that cause dead is actually only 2.85 mil (the prorated 3.4 mil sign bonus form 2016)
+** is that why Sb can have ltbe and roster bonuses in it in the cap details table? maybe that is how you figure out which prorate to not include**
+*** WHERE SectionType = Option and Category = SB THEN it is prorated option bonus - DON'T INCLUDE IN BONUS ACCELERATION UNLESS GUARANTEED ALREADY**
+
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -338,17 +347,17 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 		  ,cash_details_roster_bonus
 		  ,COALESCE(bonus_acceleration,0)
 					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season >= cap.Season),0)
-					+ CASE WHEN cap.Season = @current_season THEN COALESCE(cap_details_roster_bonus,0) - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
+					+ CASE WHEN cap.Season <= @current_season THEN LTBE - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
 		   AS dead_cap
 		  ,COALESCE(SB,0)
 					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season >= cap.Season),0)
-					+ CASE WHEN cap.Season = @current_season THEN COALESCE(cap_details_roster_bonus,0) - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
+					+ CASE WHEN cap.Season <= @current_season THEN LTBE - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
 		   AS dead_cap_post_june_1
 		  ,COALESCE(bonus_acceleration_next_season_post_june_1,0)
 					+ COALESCE((SELECT SUM(future_guaranteed_money) FROM #temp_future_guaranteed_money fu WHERE cap.PlayerID = fu.nfl_player_id AND cap.ClubID = fu.nfl_club_id AND fu.season > cap.Season),0)
 		   AS dead_cap_next_season_post_june_1
 		  ,COALESCE(bonus_acceleration,0)
-					+ CASE WHEN cap.Season = @current_season THEN COALESCE(cap_details_roster_bonus,0) - COALESCE(already_paid_roster_bonus,0) ELSE 0 END
+					+ CASE WHEN cap.Season <= @current_season THEN LTBE ELSE 0 END
 		   AS dead_cap_trade
 		  ,Misc AS cap_miscellaneous
 		  ,PotAccel AS cap_potential_acceleration
@@ -395,7 +404,6 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 
 /*
 SELECT * FROM #temp_cap_hits
-WHERE cap_end_date IS NULL
 WHERE nfl_player_id = 28037
 */
 
@@ -413,12 +421,14 @@ IF OBJECT_ID('tempdb..#temp_cap_hits_with_savings') IS NOT NULL
 	DROP TABLE #temp_cap_hits_with_savings
 
     SELECT *
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap,0) - CASE WHEN season <= @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_post_june_1,0) - CASE WHEN season <= @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings_post_june_1
+		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap,0) AS cap_savings
+		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_post_june_1,0) AS cap_savings_post_june_1
+		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_trade,0) AS cap_savings_trade
 	  INTO #temp_cap_hits_with_savings
       FROM #temp_cap_hits
 
 /*
 SELECT * FROM #temp_cap_hits_with_savings
+--WHERE nfl_player_id = 38542
 ORDER BY nfl_player_id, season, nfl_club_id
 */
