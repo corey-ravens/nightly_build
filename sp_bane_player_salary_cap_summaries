@@ -5,8 +5,16 @@
 
 This program is for creating a player salary cap information table.
 
+v2 changes the future guaranteed money to a subselect.
+v6 you change the future guaranteed p5 for past looking years.
+v7 takes out the termination pay and makes roster bonus its own table so you can exclude it if it is already guaranteed
+v8 includes the offseason workout bonuses in dead money, also changes to ltbe minus already guaranteed money and adds traded dead money
+v9 takes out unpaid option bonus proration from the bonus_acceleration variable.
+v10 totally changes how you have been doing things. Using potAccel instead of your created bonus acceleration table.
+v11 takes out already paid future guaranteed money
+v12 adds in already paid roster bonus.
 v13 tried to use "earned" and "guaranteed" to get future dead money.
-
+v14 added "already accelerated dead money" to "dead money"
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -15,7 +23,6 @@ mil per year against the cap, and the 1.2 mil per year from the option bonus is 
 
 Maybe in addition to cap already earned, make a prorated cap already / not earned, and then you can take out unearned prorated from the 
 SB field, and then once it is earned, you can take it out of the cap already earned because it is back in the prorated SB field**
-
 
 **If a player has already been traded on that contract, then his new team has no dead hit if he gets traded?**
 
@@ -245,6 +252,60 @@ FROM #temp_future_guaranteed_money
 WHERE nfl_player_id = 37078
 */
 
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table that notes already accelerated bonus money that will go in dead money.
+
+OUTPUT TABLES:
+#temp_already_accelerated_dead_money
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_accelerated_misc exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_accelerated_misc') IS NOT NULL
+	DROP TABLE #temp_accelerated_misc
+
+    SELECT PlayerID AS nfl_player_id
+		  ,Season AS season
+		  ,ClubID AS nfl_club_id
+		  ,FromDate AS from_date
+		  ,SUM(CapAmount) AS already_accelerated_dead_money
+	  INTO #temp_accelerated_misc
+      FROM ClubDB.dbo.CapDetails cap
+	 WHERE cap.Season >= 2011
+	   AND Category = 'Misc'
+	   AND Accelerated = 1
+  GROUP BY PlayerID
+		  ,Season
+		  ,ClubID
+		  ,FromDate
+ /*
+ SELECT *
+ FROM #temp_already_accelerated_dead_money
+ WHERE nfl_player_id = 37111
+ */
+ 
+-- Check if #temp_already_accelerated_dead_money exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_already_accelerated_dead_money') IS NOT NULL
+	DROP TABLE #temp_already_accelerated_dead_money
+
+	SELECT nfl_player_id
+		  ,nfl_club_id
+		  ,season
+		  ,from_date
+		  ,LEAD(from_date) OVER (PARTITION BY nfl_player_id, nfl_club_id, season ORDER BY from_date) AS to_date
+		  ,(SELECT SUM(already_accelerated_dead_money)
+		      FROM #temp_accelerated_misc cs2
+			 WHERE cs2.nfl_player_id = cs1.nfl_player_id
+			   AND cs2.nfl_club_id = cs1.nfl_club_id
+			   AND cs2.season = cs1.season
+			   AND cs2.from_date >= cs1.from_date) 
+		    AS already_accelerated_dead_money
+	  INTO #temp_already_accelerated_dead_money
+	  FROM #temp_accelerated_misc cs1
+
+
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Create a table with a player's cap hit and dead money.
@@ -302,16 +363,61 @@ IF OBJECT_ID('tempdb..#temp_cap_hits') IS NOT NULL
 		  ,PotAccel
 		  ,COALESCE(future_guaranteed_money,0) as fgm
 		  ,COALESCE(cap_already_earned,0) as cae		  
-		  ,CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) - COALESCE(cap_details_option_bonus,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
-				ELSE SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+		  ,CASE WHEN CashSB_Option > 0 THEN SB 
+					+ PotAccel 
+					+ COALESCE(future_guaranteed_money,0) 
+					+ COALESCE(cap_already_earned,0) 
+					- COALESCE(cap_details_option_bonus,0)
+					+ COALESCE(already_accelerated_dead_money,0)
+					+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END									
+				ELSE SB 
+					+ PotAccel 
+					+ COALESCE(future_guaranteed_money,0)
+					+ COALESCE(cap_already_earned,0)
+					+ COALESCE(already_accelerated_dead_money,0)
+					+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
 		   END AS dead_cap
-		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) - COALESCE(cap_details_option_bonus,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
-						  ELSE SB + PotAccel + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END END)
+		  ,CapAmt - (CASE WHEN CashSB_Option > 0 THEN SB 
+							+ PotAccel 
+							+ COALESCE(future_guaranteed_money,0) 
+							+ COALESCE(cap_already_earned,0) 
+							- COALESCE(cap_details_option_bonus,0)
+							+ COALESCE(already_accelerated_dead_money,0)
+							+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+						  ELSE SB 
+							+ PotAccel
+							+ COALESCE(future_guaranteed_money,0)
+							+ COALESCE(cap_already_earned,0)
+							+ COALESCE(already_accelerated_dead_money,0)
+							+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+					  END)
 		   AS cap_savings
-		  ,SB + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS dead_cap_post_june_1
-		  ,CapAmt - (SB + COALESCE(future_guaranteed_money,0) + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) AS cap_savings_post_june_1
-		  ,SB + PotAccel + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS dead_cap_trade
-		  ,CapAmt - (SB + PotAccel + COALESCE(cap_already_earned,0) + CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) AS cap_savings_trade
+		  ,SB 
+			+ COALESCE(future_guaranteed_money,0)
+			+ COALESCE(cap_already_earned,0)
+			+ COALESCE(already_accelerated_dead_money,0)
+			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END
+		   AS dead_cap_post_june_1
+		  ,CapAmt 
+			- (SB 
+			+ COALESCE(future_guaranteed_money,0)
+			+ COALESCE(cap_already_earned,0)
+			+ COALESCE(already_accelerated_dead_money,0)
+			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END)
+		   AS cap_savings_post_june_1
+		  ,SB
+			+ PotAccel
+			+ COALESCE(cap_already_earned,0)
+			+ COALESCE(already_accelerated_dead_money,0)
+			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END 
+		   AS dead_cap_trade
+		  ,CapAmt 
+			- (SB
+			+ PotAccel
+			+ COALESCE(cap_already_earned,0)
+			+ COALESCE(already_accelerated_dead_money,0)
+			+ CASE WHEN cap.season = @current_season AND MONTH(GETDATE()) >= 6 THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END) 
+		   AS cap_savings_trade
 		  ,Misc AS cap_miscellaneous
 		  ,PotAccel AS cap_potential_acceleration
 		  ,FullP5 AS cap_full_paragraph_5
@@ -354,6 +460,12 @@ INNER JOIN BaneProductionAnalytics.dbo.players pl
 	   AND fg.season = cap.Season
 	   AND fg.nfl_club_id = cap.ClubID
 	   AND COALESCE(fg.to_date,'12/31/2099') =  COALESCE(cap.ToDate,'12/31/2099')
+ LEFT JOIN #temp_already_accelerated_dead_money aa
+		ON aa.nfl_player_id = cap.PlayerID
+	   AND aa.season = cap.Season
+	   AND aa.nfl_club_id = cap.ClubID
+	   AND cap.FromDate >= aa.from_date
+	   AND cap.FromDate < COALESCE(aa.to_date,'12/31/2099')
 	 WHERE 1=1
 	   AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 	   AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
