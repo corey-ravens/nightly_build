@@ -9,10 +9,9 @@ Byron Maxwell - dead money off by 3 mil in 2016 and 2 mil high in 2017 - because
 Ndamukong Suh - dead money off by 10 mil in 2017 - NFL has 10 more mil future guarnateed than OTC has
 Fletcher Cox - NFL has 9 million in future guaranteed money, OTC only 3
 
-For PREVIOUS YEAR cap hits, if the salary got fuly guaranteed after that season was over, don't include it in daed money.
-So on the future guaranteed salary step, if season < current season, then don't take the rows where ToDate is null.
-It seems like you're going to have to do a subselect, and then for each season count the future guaranteed salary AS OF that season
-and exclude guarantee if it changes after that season (where ChangeDate < regular season end).
+v6 you change the future guaranteed p5 for past looking years.
+
+If a roster bonus becomes fully guaranteed, you are double couting in the current year dead cap because you add it back in again.
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -310,6 +309,39 @@ OUTPUT TABLES:
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
+DECLARE @current_season INT
+SELECT @current_season = (SELECT season FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() BETWEEN league_year_start AND league_year_end)
+
+-- Check if #temp_future_guaranteed_p5_prev_seasons exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_future_guaranteed_p5_prev_seasons') IS NOT NULL
+	DROP TABLE #temp_future_guaranteed_p5_prev_seasons
+
+    SELECT cg.PlayerID AS nfl_player_id
+	      ,cg.Season AS season
+		  ,cg.ClubID AS nfl_club_id
+		  ,cg.Guar_Cap AS p5_future_guarantee
+	      ,RANK() OVER (PARTITION BY PlayerID, cg.Season, ClubID ORDER BY COALESCE(ToDate,'12/31/2088') DESC, ChangeDate) AS guarantee_order
+	  INTO #temp_future_guaranteed_p5_prev_seasons
+	  FROM ClubDB.dbo.CapGuarantee cg
+INNER JOIN Analytics.dbo.map_nfl_league_year_dates ld
+		ON cg.Season = ld.season
+	 WHERE Effective = 1
+	   --AND Finalized = 1
+	   --AND PotentialGuarantee = 0
+	   AND cg.Season >= 2011
+	   AND cg.Season < @current_season
+	   AND ChangeDate < regular_season_end
+  ORDER BY cg.PlayerID
+	      ,cg.Season
+		  ,cg.ClubID
+
+/*	   
+SELECT *
+FROM #temp_cap_guarantee_prev_seasons
+WHERE PlayerID = 28037
+ORDER BY Season, guarantee_order
+*/
+
 -- Check if #temp_future_guaranteed_p5 exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_future_guaranteed_p5') IS NOT NULL
 	DROP TABLE #temp_future_guaranteed_p5
@@ -318,16 +350,12 @@ IF OBJECT_ID('tempdb..#temp_future_guaranteed_p5') IS NOT NULL
 	      ,cg.Season AS season
 		  ,cg.ClubID AS nfl_club_id
 		  ,cg.Guar_Cap AS p5_future_guarantee
+	      ,1 AS guarantee_order
 	  INTO #temp_future_guaranteed_p5
 	  FROM ClubDB.dbo.CapGuarantee cg
-INNER JOIN ClubDB.dbo.CapRollup cr
-		ON cg.PlayerID = cr.PlayerID
-	   AND cg.Season = cr.Season
-	   AND cg.ClubID = cr.ClubID
-	   AND cr.ToDate IS NULL
 	 WHERE Effective = 1
-	   AND cg.season >= 2011
-	   AND cg.ToDate IS NULL
+	   AND cg.Season >= @current_season
+	   AND ToDate IS NULL
   ORDER BY cg.PlayerID
 	      ,cg.Season
 		  ,cg.ClubID
@@ -335,7 +363,19 @@ INNER JOIN ClubDB.dbo.CapRollup cr
 /*	   
 SELECT *
 FROM #temp_future_guaranteed_p5
-WHERE nfl_player_id = 35481
+WHERE nfl_player_id = 35441
+ORDER BY Season, guarantee_order
+*/
+
+INSERT INTO #temp_future_guaranteed_p5
+ 	 SELECT *
+	   FROM #temp_future_guaranteed_p5_prev_seasons
+	  WHERE guarantee_order = 1
+
+/*	   
+SELECT *
+FROM #temp_future_guaranteed_p5
+WHERE nfl_player_id = 28037
 ORDER BY Season
 */
 
@@ -347,12 +387,14 @@ Sandy's old SAS code added a day to the cap end date and then called the
 variable up_to_but_not_including. Below is the code if you want to change
 to that at some point.
 
+COALESCE(DATEADD(DAY,1, ToDate),'12/31/2088')
+
 The reason to include current year roster bonus in dead money calculation is that typically roster bonuses paid
 in first few days of the league year count on that year's cap. So if we are already date wise in the current league
 year, that bonus has likely already been paid, so it would be dead money.  May not be perfect but seems to work
-well for now.
+well for now. Although it is double counting the roster bonus if it became fully guaranteed at some point earlier on.
 
-COALESCE(DATEADD(DAY,1, ToDate),'12/31/2088')
+
 
 OUTPUT TABLES:
 #temp_cap_hits
@@ -474,11 +516,11 @@ IF OBJECT_ID('tempdb..#temp_cap_hits_with_savings') IS NOT NULL
 	DROP TABLE #temp_cap_hits_with_savings
 
     SELECT *
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap,0) - CASE WHEN season = @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings
-		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_post_june_1,0) - CASE WHEN season = @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings_post_june_1
+		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap,0) - CASE WHEN season <= @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings
+		  ,COALESCE(cap_amount,0) - COALESCE(dead_cap_post_june_1,0) - CASE WHEN season <= @current_season THEN COALESCE(cap_details_offseason_bonus,0) ELSE 0 END AS cap_savings_post_june_1
 	  INTO #temp_cap_hits_with_savings
       FROM #temp_cap_hits
 
 /*
-SELECT * FROM #temp_cap_hits_with_savings
+SELECT * FROM #temp_cap_hits_with_savings where season >= 2016
 */
