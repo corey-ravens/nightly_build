@@ -1,15 +1,12 @@
 USE [Analytics]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 10/1/2018 2:08:58 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_analysis_players_salary_cap]    Script Date: 8/25/2019 8:59:46 AM ******/
 SET ANSI_NULLS ON
 GO
 
 SET QUOTED_IDENTIFIER ON
 GO
-
-
-
 
 
 
@@ -22,26 +19,11 @@ ALTER PROCEDURE [dbo].[sp_analysis_players_salary_cap] (@iSeason INT, @oReturnCD
 
 Procedure Name:	sp_stage_players_salary_cap
 Author:			Corey Krawiec
-Creation Date:	12/2/2016
+Creation Date:	12/02/2016
 Description:       
 
 This program is for creating a player salary cap information table.
 
-v2 changes the future guaranteed money to a subselect.
-v6 you change the future guaranteed p5 for past looking years.
-v7 takes out the termination pay and makes roster bonus its own table so you can exclude it if it is already guaranteed
-v8 includes the offseason workout bonuses in dead money, also changes to ltbe minus already guaranteed money and adds traded dead money
-v9 takes out unpaid option bonus proration from the bonus_acceleration variable.
-v10 totally changes how you have been doing things. Using potAccel instead of your created bonus acceleration table.
-v11 takes out already paid future guaranteed money
-v12 adds in already paid roster bonus.
-v13 tried to use "earned" and "guaranteed" to get future dead money.
-v14 added "already accelerated dead money" to "dead money"
-v15 changes the order or variables and cleans up a bit
-v16 (12/6/2016) adds in retired players for dead money flag
-v17 (12/17/2016) adds the "active row" flag so you know which row to use for display
-v18 (08/18/2017) changes the where clause in the final step so it only gives rows where the cap season is >= the min season on the player's effective contract
-v19 (10/01/2018) changes the where clause so that dead money years show up even when a player is not under contract
 
 **Keep an eye on what happens to Fletcher Cox in the 2017 league year for future years. Once his guaranteed "option" bonus 
 actually gets paid, is that getting double counted because it is in the "SB" field and the cap already earned field?
@@ -52,13 +34,28 @@ Maybe in addition to cap already earned, make a prorated cap already / not earne
 SB field, and then once it is earned, you can take it out of the cap already earned because it is back in the prorated SB field**
 
 Input Parameters:
-	None
+	@iSeason		INT
 	
 Output Parameters:
 	@oReturnCode	INT
 
 Modifications:
-Date         SE           Description
+Date		SE				Description
+v2			Corey Krawiec	changes the future guaranteed money to a subselect.
+v6			Corey Krawiec	you change the future guaranteed p5 for past looking years.
+v7			Corey Krawiec	takes out the termination pay and makes roster bonus its own table so you can exclude it if it is already guaranteed
+v8			Corey Krawiec	includes the offseason workout bonuses in dead money, also changes to ltbe minus already guaranteed money and adds traded dead money
+v9			Corey Krawiec	takes out unpaid option bonus proration from the bonus_acceleration variable.
+v10			Corey Krawiec	totally changes how you have been doing things. Using potAccel instead of your created bonus acceleration table.
+v11			Corey Krawiec	takes out already paid future guaranteed money
+v12			Corey Krawiec	adds in already paid roster bonus.
+v13			Corey Krawiec	tried to use "earned" and "guaranteed" to get future dead money.
+v14			Corey Krawiec	added "already accelerated dead money" to "dead money"
+v15			Corey Krawiec	changes the order or variables and cleans up a bit
+12/06/2016	Corey Krawiec	adds in retired players for dead money flag (v16)
+12/17/2016	Corey Krawiec	adds the "active row" flag so you know which row to use for display (v17)
+08/18/2017	Corey Krawiec	changes the where clause in the final step so it only gives rows where the cap season is >= the min season on the player's effective contract (v18)
+08/25/2019	Corey Krawiec	adds a step to sum up when multiple bonuses (like roster bonuses) are paid on the same day.
 
 **********************************************************************************/
 
@@ -618,7 +615,13 @@ WHERE nfl_player_id = 37078
 	    AND act.season = cap.Season
 	    AND act.from_date = cap.FromDate
 	WHERE 1=1
-		AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep cr WHERE EffectiveContract = 1 AND cr.PlayerID = cap.PlayerID)
+		AND (cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep cr WHERE EffectiveContract = 1 AND cr.PlayerID = cap.PlayerID)
+		OR (cap.season >= @iSeason AND CapAmt > 0 AND ((CapAmt > 0 AND Cash = 0 AND cap.season >= 2002 AND Para5 = 0)
+				OR (cap.season >= @iSeason AND cap.ClubID <> (SELECT ClubID FROM ClubDB.dbo.PlayerExtract pe WHERE pe.PlayerID = cap.PlayerID))
+				OR (cap.season > COALESCE(last_season_before_retirement,99999))
+				OR ((CapAmt + Para5 + SB + LTBE + PotAccel) = 0)
+				)
+			))
 		--AND cap.season >= (SELECT MIN(FirstContractYear) FROM ClubDB.dbo.ContractRep WHERE EffectiveContract = 1)
 		--AND (CapAmt + Para5 + SB + LTBE + PotAccel) <> 0
 	   --AND cap.ToDate IS NULL
