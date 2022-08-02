@@ -1,7 +1,7 @@
 USE [AnalyticsDevelopment]
 GO
 
-/****** Object:  StoredProcedure [dbo].[sp_bane_pro_UPDATE_ANALYTICS]    Script Date: 5/12/2022 11:16:04 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_bane_pro_UPDATE_ANALYTICS]    Script Date: 8/2/2022 1:47:13 PM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -37,18 +37,19 @@ Author:			Corey Krawiec
 Creation Date:	10/16/2017
 Description:       
 
-	1) Blocking Stats
-	2) Run Defense Stats
-	3) Coverage Stats
-	4) Pass Rush Stats
-	5) Receiving Stats
-	6) Running Stats
-	7) Tackling Stats
-	8) Passing Stats
-	9) Special Teams Stats
+	01) Blocking Stats
+	02) Run Defense Stats
+	03) Coverage Stats
+	04) Pass Rush Stats
+	05) Receiving Stats
+	06) Running Stats
+	07) Tackling Stats
+	08) Passing Stats
+	09) Special Teams Stats
 	10) Game playtimes
 	11) Gameweek status
 	12) Penalty Stats
+	13) Contracts Table
 
 				
 Input Parameters:
@@ -1239,6 +1240,149 @@ BEGIN
 		AND ba.season >= @iSeason
 
 
+
+	/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	(13)
+
+	
+	Contracts (as of 08/2022)
+
+    OUTPUT TABLES:            
+		bane_player_contracts
+
+	----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update any rows that have changed
+	UPDATE [Analytics].[dbo].[bane_player_contracts]
+	SET [nfl_contract_id] = te.[nfl_contract_id]
+		,[previous_nfl_contract_id] = te.[previous_nfl_contract_id]
+		,[nfl_player_id] = te.[nfl_player_id]
+		,[player] = te.[player]
+		,[nfl_agent_id] = te.[nfl_agent_id]
+		,[nfl_club_id] = te.[nfl_club_id]
+		,[nfl_transaction_id] = te.[nfl_transaction_id]
+		,[signing_date] = te.[signing_date]
+		,[signing_type] = te.[signing_type]
+		,[first_contract_year] = te.[first_contract_year]
+		,[last_contract_year] = te.[last_contract_year]
+		,[total_years] = te.[total_years]
+		,[true_years] = te.[true_years]
+		,[true_package_amount] = te.[true_package_amount]
+		,[true_average_per_year] = te.[true_average_per_year]
+		,[true_signing_bonus] = te.[true_signing_bonus]
+		,[total_package_amount] = te.[total_package_amount]
+		,[total_average_per_year] = te.[total_average_per_year]
+		,[three_year_compensation] = te.[three_year_compensation]
+		,[three_year_average_per_year] = te.[three_year_average_per_year]
+		,[total_p5] = te.[total_p5]
+		,[p5_average_per_year] = te.[p5_average_per_year]
+		,[total_guaranteed_at_signing] = te.[total_guaranteed_at_signing]
+		,[total_signing_bonus] = te.[total_signing_bonus]
+		,[total_roster_bonus] = te.[total_roster_bonus]
+		,[total_option_bonus] = te.[total_option_bonus]
+		,[total_reporting_bonus] = te.[total_reporting_bonus]
+		,[total_incentives] = te.[total_incentives]
+		,[total_offseason_bonus] = te.[total_offseason_bonus]
+		,[effective_contract] = te.[effective_contract]
+		,[most_recent_contract] = te.[most_recent_contract]
+		,[most_recent_new_money] = te.[most_recent_new_money]
+		,[first_new_year] = te.[first_new_year]
+		,[actual_last_contract_year] = te.[actual_last_contract_year]
+		,[contract_has_void] = te.[contract_has_void]
+		,[is_rookie_contract] = te.[is_rookie_contract]
+		,[is_minimum_salary_benefit_contract] = te.[is_minimum_salary_benefit_contract]
+		,[contract_record_count] = te.[contract_record_count]
+		,[same_season_contract_count] = te.[same_season_contract_count]
+		,[true_extension] = te.[true_extension]
+		,[fifth_year_option_exercised] = te.[fifth_year_option_exercised]
+		,[signing_date_next_contract] = te.[signing_date_next_contract]
+		,[extension_count] = te.[extension_count]
+		,[true_apy_percent_of_cap] = te.[true_apy_percent_of_cap]
+		,[guaranteed_at_signing] = te.[guaranteed_at_signing]
+		,[total_guaranteed_percent] = te.[total_guaranteed_percent]
+		,[guaranteed_percent] = te.[guaranteed_percent]
+		,[active_row] = te.[active_row]
+		,[nfl_club_key] = te.[nfl_club_key]
+		,[renegotiation_type] = te.[renegotiation_type]
+		,[cap_difference] = te.[cap_difference]
+		,[incentive_maximum] = te.[incentive_maximum]
+		,[incentive_difference] = te.[incentive_difference]
+		,[incentive_earn_back_percent] = te.[incentive_earn_back_percent]
+		,updated_at = te.updated_at
+	FROM [AnalyticsDevelopment].[dbo].[bane_player_contracts] te
+	WHERE [bane_player_contracts].[nfl_contract_id] = te.[nfl_contract_id]
+		AND (ISNULL([bane_player_contracts].[previous_nfl_contract_id],0) <> ISNULL(te.[previous_nfl_contract_id],0)
+		OR [bane_player_contracts].[nfl_player_id] <> te.[nfl_player_id]
+		OR [bane_player_contracts].[player] <> te.[player]
+		OR [bane_player_contracts].[nfl_agent_id] <> te.[nfl_agent_id]
+		OR [bane_player_contracts].[nfl_club_id] <> te.[nfl_club_id]
+		OR [bane_player_contracts].[nfl_transaction_id] <> te.[nfl_transaction_id]
+		OR [bane_player_contracts].[signing_date] <> te.[signing_date]
+		OR [bane_player_contracts].[signing_type] <> te.[signing_type]
+		OR [bane_player_contracts].[first_contract_year] <> te.[first_contract_year]
+		OR [bane_player_contracts].[last_contract_year] <> te.[last_contract_year]
+		OR [bane_player_contracts].[total_years] <> te.[total_years]
+		OR [bane_player_contracts].[true_years] <> te.[true_years]
+		OR [bane_player_contracts].[true_package_amount] <> te.[true_package_amount]
+		OR [bane_player_contracts].[true_average_per_year] <> te.[true_average_per_year]
+		OR [bane_player_contracts].[true_signing_bonus] <> te.[true_signing_bonus]
+		OR [bane_player_contracts].[total_package_amount] <> te.[total_package_amount]
+		OR [bane_player_contracts].[total_average_per_year] <> te.[total_average_per_year]
+		OR [bane_player_contracts].[three_year_compensation] <> te.[three_year_compensation]
+		OR [bane_player_contracts].[three_year_average_per_year] <> te.[three_year_average_per_year]
+		OR [bane_player_contracts].[total_p5] <> te.[total_p5]
+		OR [bane_player_contracts].[p5_average_per_year] <> te.[p5_average_per_year]
+		OR ISNULL([bane_player_contracts].[total_guaranteed_at_signing],0) <> ISNULL(te.[total_guaranteed_at_signing],0)
+		OR [bane_player_contracts].[total_signing_bonus] <> te.[total_signing_bonus]
+		OR [bane_player_contracts].[total_roster_bonus] <> te.[total_roster_bonus]
+		OR [bane_player_contracts].[total_option_bonus] <> te.[total_option_bonus]
+		OR [bane_player_contracts].[total_reporting_bonus] <> te.[total_reporting_bonus]
+		OR [bane_player_contracts].[total_incentives] <> te.[total_incentives]
+		OR [bane_player_contracts].[total_offseason_bonus] <> te.[total_offseason_bonus]
+		OR [bane_player_contracts].[effective_contract] <> te.[effective_contract]
+		OR [bane_player_contracts].[most_recent_contract] <> te.[most_recent_contract]
+		OR [bane_player_contracts].[most_recent_new_money] <> te.[most_recent_new_money]
+		OR ISNULL([bane_player_contracts].[first_new_year],0) <> ISNULL(te.[first_new_year],0)
+		OR ISNULL([bane_player_contracts].[actual_last_contract_year],0) <> ISNULL(te.[actual_last_contract_year],0)
+		OR ISNULL([bane_player_contracts].[contract_has_void],0) <> ISNULL(te.[contract_has_void],0)
+		OR [bane_player_contracts].[is_rookie_contract] <> te.[is_rookie_contract]
+		OR [bane_player_contracts].[is_minimum_salary_benefit_contract] <> te.[is_minimum_salary_benefit_contract]
+		OR [bane_player_contracts].[contract_record_count] <> te.[contract_record_count]
+		OR [bane_player_contracts].[same_season_contract_count] <> te.[same_season_contract_count]
+		OR [bane_player_contracts].[true_extension] <> te.[true_extension]
+		OR ISNULL([bane_player_contracts].[fifth_year_option_exercised],0) <> ISNULL(te.[fifth_year_option_exercised],0)
+		OR ISNULL([bane_player_contracts].[signing_date_next_contract],'01/01/1901') <> ISNULL(te.[signing_date_next_contract],'01/01/1901')
+		OR [bane_player_contracts].[extension_count] <> te.[extension_count]
+		OR ISNULL([bane_player_contracts].[true_apy_percent_of_cap],0) <> ISNULL(te.[true_apy_percent_of_cap],0)
+		OR ISNULL([bane_player_contracts].[guaranteed_at_signing],0) <> ISNULL(te.[guaranteed_at_signing],0)
+		OR ISNULL([bane_player_contracts].[total_guaranteed_percent],0) <> ISNULL(te.[total_guaranteed_percent],0)
+		OR ISNULL([bane_player_contracts].[guaranteed_percent],0) <> ISNULL(te.[guaranteed_percent],0)
+		OR [bane_player_contracts].[active_row] <> te.[active_row]
+		OR [bane_player_contracts].[nfl_club_key] <> te.[nfl_club_key]
+		OR ISNULL([bane_player_contracts].[renegotiation_type],'') <> ISNULL(te.[renegotiation_type],'')
+		OR ISNULL([bane_player_contracts].[cap_difference],0) <> ISNULL(te.[cap_difference],0)
+		OR ISNULL([bane_player_contracts].[incentive_maximum],0) <> ISNULL(te.[incentive_maximum],0)
+		OR ISNULL([bane_player_contracts].[incentive_difference],0) <> ISNULL(te.[incentive_difference],0)
+		OR ISNULL([bane_player_contracts].[incentive_earn_back_percent],0) <> ISNULL(te.[incentive_earn_back_percent],0)
+		)
+
+
+--Insert any new rows
+	INSERT INTO [Analytics].[dbo].[bane_player_contracts]
+	SELECT te.*
+	FROM [AnalyticsDevelopment].[dbo].[bane_player_contracts] te
+	LEFT JOIN [Analytics].[dbo].[bane_player_contracts] ba
+		ON te.[nfl_contract_id] = ba.[nfl_contract_id]
+	WHERE ba.[nfl_contract_id] IS NULL
+
+
+--Delete any no longer existing rows
+	DELETE FROM [Analytics].[dbo].[bane_player_contracts]
+	FROM [Analytics].[dbo].[bane_player_contracts] ba
+	LEFT JOIN [AnalyticsDevelopment].[dbo].[bane_player_contracts] te
+		ON ba.[nfl_contract_id] = te.[nfl_contract_id]
+	WHERE te.[nfl_contract_id] IS NULL
 
 
 	
